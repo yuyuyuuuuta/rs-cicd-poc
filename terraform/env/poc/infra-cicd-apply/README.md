@@ -94,17 +94,36 @@ Connection を作り直す場合は、作成直後に PENDING になります。
 
 静的検証ジョブには識別情報 Secrets を渡しません。AWS ジョブの trusted なコードだけが設定確認と起動・ログ取得を行います。CodeBuild には管理者が Terraform で登録した環境変数として識別情報を渡します。これらの値と State は AWS 側で非公開管理し、Git に含めません。
 
-OIDC の信頼条件は `repo:<OWNER>/<REPOSITORY>:ref:refs/heads/main` です。実際のリポジトリは非公開 tfvars から設定します。Environment やカスタム subject を使う場合は信頼条件も変更してください。
+OIDC の信頼条件は `repo:<OWNER>/<REPOSITORY>:environment:terraform-apply` です。実際のリポジトリは非公開 tfvars から設定します。この信頼条件は AWS に反映済みで、更新後の plan は差分なしです。Environment subject にはブランチ名が含まれないため、次の deployment branch 制限が必須です。カスタム subject を使う場合も実際の subject に合わせて変更してください。
+
+## Apply 前の承認設定
+
+GitHub の Settings → Environments → New environment で、Environment `terraform-apply` を作成し、以下を設定してください。この GitHub 側の管理設定はまだ実施していません。
+
+1. Required reviewers を有効にし、apply を承認するユーザーまたはチームを最低 1 件登録して保存します。複数人を登録しても通常はそのうち 1 人の承認で進むため、全員承認を要求する設定ではありません。
+2. Deployment branches and tags を Selected branches and tags にし、ブランチ `main` だけを許可します。全ブランチ許可やタグ許可にしないでください。
+3. 管理者も承認を省略できないようにする場合は、管理者による protection rules の bypass を許可しない設定にします。
+4. Prevent self-review を有効にする場合、workflow を起動する本人以外の承認者が必要です。承認者を起動者 1 人だけにしないでください。
+
+workflow の `environment` 指定だけでは Required reviewers は設定されません。存在しない Environment が自動作成されたり、保護ルールが未設定だったりすると、承認待ちにならず進む場合があります。Required reviewers と branch 制限を確認してから実行してください。
+
+既存の 6 つの Repository Secrets はそのまま使えます。Environment Secrets へ移動する必要はありません。同じ名前の Environment Secret を作成した場合は Environment 側が優先されるため、意図せず値を上書きしないでください。
+
+実行順は `inspect` → `static-checks` → Environment 承認待ち → `aws-apply` → `merge` です。Environment 承認前は AWS ジョブの runner とステップは開始されず、OIDC 認証・Pipeline 起動は行いません。却下された場合も apply と自動マージは行いません。承認待ちの間に PR HEAD/base が変わった場合は、承認後の再確認で Pipeline 起動を止めます。
+
+この承認は Pipeline 起動前の許可です。現在は静的解析後に承認する構成で、具体的な Terraform plan 差分を提示して承認する構成ではありません。
+
+今回の承認ゲート変更は基盤変更 PR として手動で main にマージしてください。作業中の `ci-test` の検証用タグ変更を同じ PR に含めず、承認ゲートを反映した後の別 PR にします。AWS の OIDC はすでに Environment subject に切り替えているため、変更を main に反映するまでは古い workflow を起動しないでください。
 
 ## 手動 Workflow
 
 workflow は [.github/workflows/terraform-apply.yml](../../../../.github/workflows/terraform-apply.yml)、補助コードは [.github/scripts/terraform_apply.py](../../../../.github/scripts/terraform_apply.py) です。`workflow_dispatch` だけを使用し、PR 作成・push では起動しません。現在の登録対象は `ci-test` だけです。
 
-1. 初回は管理者が今回のコード一式をレビューし、workflow と補助スクリプトを含めて `main` に commit・push します。初回配置用 PR や基盤変更 PR を apply workflow でマージしようとしないでください。
+1. 管理者がコードをレビューして `main` に反映し、上記の Environment 保護ルールを設定します。初回配置用 PR や承認ゲート変更などの基盤 PR を apply workflow でマージしようとしないでください。
 2. `terraform/env/poc/ci-test/` を変更する同一リポジトリの PR を、`main` 向けに作成します。共同変更を許可する対象外ファイルはルート README と Terraform 全体 README だけです。基盤、IAM、workflow、未登録 root の変更を含めると停止します。
 3. Actions → `Terraform apply PR (manual)` → Run workflow で Branch に `main`、`pr_number` に対象 PR 番号を指定します。起動時点の `main` が進んでいた場合や GitHub が mergeability を計算中の場合は、情報が確定してから再実行します。
 4. `inspect` が open・非 draft・同一リポジトリ・マージ可能性を確認します。`static-checks` は AWS 権限なしで固定 SHA を checkout し、fmt・backend 無効 init・validate を実行します。provider lock の変更は自動許可せず、PR の lock ファイルを使用します。
-5. `aws-apply` は trusted な `main` の補助コードだけを実行し、OIDC 認証と AWS アカウント照合後、SHA override 付きで専用 Pipeline を起動します。Pipeline 成功後も、SourceOutput の revision SHA と CodeBuild 成功を確認します。
+5. Environment `terraform-apply` の Required reviewers が許可すると `aws-apply` が開始します。trusted な `main` の補助コードだけを実行し、OIDC 認証と AWS アカウント照合後、SHA override 付きで専用 Pipeline を起動します。Pipeline 成功後も、SourceOutput の revision SHA と CodeBuild 成功を確認します。
 6. CloudWatch Logs を全ページ取得し、マーカー間のログを Summary に掲載します。空行・ANSI 色を除去し、大きいログは表示を切り詰めます。ログ取得失敗やマーカー不足でもマージしません。
 7. `merge` 専用ジョブが PR HEAD と base を再確認し、GitHub の merge API に適用済み HEAD SHA を指定してマージします。ブランチ保護を迂回する API や管理者オプションは使用しません。
 

@@ -2,15 +2,15 @@
 
 GitHub Actions と AWS CodePipeline を組み合わせた Terraform apply の PoC です。
 
-現在は State 保存基盤と `ci-test` 専用 apply 基盤の AWS 構築が完了しています。apply 基盤は 14 リソース作成済み、Connection は AVAILABLE です。[手動 apply workflow](.github/workflows/terraform-apply.yml) も実装し、35 件のテストと actionlint を通過しました。識別情報は GitHub Secrets と Git 管理外のローカル設定に分離しています。CodeBuild の非公開入力設定は反映済みで、追加 Secret の登録、workflow の push、実際の OIDC 認証・apply・自動マージは未実施です。plan 基盤はまだ実装していません。
+現在は State 保存基盤と `ci-test` 専用 apply 基盤の AWS 構築、Secrets 登録、初回 workflow の main 配置が完了しています。apply 基盤は 14 リソース作成済み、Connection は AVAILABLE です。apply 前に `terraform-apply` Environment の承認を要求する変更を追加し、AWS の OIDC 信頼条件も反映済みです。GitHub 側の保護ルール設定と今回の変更の main 反映、実際の OIDC 認証・apply・自動マージは未実施です。plan 基盤はまだ実装していません。
 
 構成と現在の手順は [terraform/README.md](terraform/README.md) を参照してください。
 
 ## 手動 Apply
 
-初回は [apply 基盤の設定手順](terraform/env/poc/infra-cicd-apply/README.md) に従って 6 つの Repository Secrets を登録します。その後、管理者が基盤コード・workflow・補助スクリプトをレビューし、`main` に commit・push します。この初回配置を含む PR は apply workflow の対象にしません。
+初回は [apply 基盤の設定手順](terraform/env/poc/infra-cicd-apply/README.md) に従って 6 つの Repository Secrets と Environment `terraform-apply` の Required reviewers・`main` 制限を設定します。保護ルールの設定と承認ゲートのコードを `main` に配置するまでは実行しないでください。初回配置や基盤変更の PR は apply workflow の対象にしません。
 
-その後、`terraform/env/poc/ci-test/` の変更 PR を作成し、Actions の `Terraform apply PR (manual)` → Run workflow → Branch: `main` で PR 番号を指定します。fmt・validate 後、専用 Pipeline がその SHA を apply し、Actions がログを取得・整形します。成功と HEAD・base の不変を確認してから、同じ HEAD SHA を指定してマージします。
+その後、`terraform/env/poc/ci-test/` の変更 PR を作成し、Actions の `Terraform apply PR (manual)` → Run workflow → Branch: `main` で PR 番号を指定します。fmt・validate 後に Environment 承認を待ち、承認後にだけ専用 Pipeline を起動します。Actions がログを取得・整形し、成功と HEAD・base の不変を確認してから、同じ HEAD SHA を指定してマージします。
 
 fork PR、基盤や workflow を変更する PR、実行中に更新された PR、失敗・タイムアウト時は自動マージしません。AWS に加えた変更は自動ロールバックされません。詳細と前提設定は [apply 基盤の README](terraform/env/poc/infra-cicd-apply/README.md) を参照してください。
 
