@@ -1,0 +1,7 @@
+aws_account_id      = "<AWS_ACCOUNT_ID>"
+aws_region          = "<AWS_REGION>"
+github_repository   = "<OWNER>/<REPOSITORY>"
+name_prefix         = "<RESOURCE_NAME_PREFIX>"
+state_bucket_name   = "<TF_STATE_BUCKET>"
+artifact_bucket_name = "<ARTIFACT_BUCKET>"
+test_bucket_name    = "<TF_TEST_BUCKET>"
