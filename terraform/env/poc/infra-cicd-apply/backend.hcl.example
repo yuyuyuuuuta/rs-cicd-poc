@@ -1,0 +1,2 @@
+bucket = "<TF_STATE_BUCKET>"
+region = "<AWS_REGION>"

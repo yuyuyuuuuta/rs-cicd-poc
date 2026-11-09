@@ -1,0 +1,139 @@
+name: Terraform apply PR (manual)
+run-name: "Terraform apply PR #${{ inputs.pr_number }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to validate, apply, and merge
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-apply-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  AWS_PAGER: ""
+  PR_NUMBER: ${{ inputs.pr_number }}
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      targets: ${{ steps.pr.outputs.targets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Test workflow guards
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - name: Inspect PR and select registered roots
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/terraform_apply.py prepare
+
+  static-checks:
+    needs: inspect
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.inspect.outputs.head_sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.6
+          terraform_wrapper: false
+      - name: Check PR Terraform without AWS credentials
+        env:
+          CANDIDATE_DIR: ${{ github.workspace }}/candidate
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+        run: python3 .github/scripts/terraform_apply.py validate
+
+  aws-apply:
+    needs: [inspect, static-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    outputs:
+      applied_head: ${{ steps.apply.outputs.applied_head }}
+      applied_base: ${{ steps.apply.outputs.applied_base }}
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_GITHUB_ACTIONS_ROLE_ARN: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+      TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
+      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate private configuration
+        run: python3 .github/scripts/terraform_apply.py check-config
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+          role-session-name: gha-terraform-apply
+          role-duration-seconds: 3600
+      - name: Verify AWS account
+        shell: bash
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          [[ "$account" == "$AWS_ACCOUNT_ID" ]]
+      - name: Apply exact PR commit and retrieve logs
+        id: apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+        run: python3 .github/scripts/terraform_apply.py apply
+
+  merge:
+    needs: [inspect, aws-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Merge only the successfully applied PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.aws-apply.outputs.applied_head }}
+          EXPECTED_BASE_SHA: ${{ needs.aws-apply.outputs.applied_base }}
+        run: python3 .github/scripts/terraform_apply.py merge

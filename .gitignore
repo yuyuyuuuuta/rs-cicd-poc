@@ -15,6 +15,9 @@ crash.*.log
 # to change depending on the environment.
 *.tfvars
 *.tfvars.json
+backend.hcl
+*.local.json
+admin/iam/*.json
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
@@ -42,3 +45,9 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+*.tfplan
+tfplan
+planout
+.env
+.env.*
+.github/scripts/__pycache__/
