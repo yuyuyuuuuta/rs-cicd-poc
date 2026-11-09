@@ -73,6 +73,8 @@ jobs:
 
   aws-apply:
     needs: [inspect, static-checks]
+    if: github.ref == 'refs/heads/main'
+    environment: terraform-apply
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
