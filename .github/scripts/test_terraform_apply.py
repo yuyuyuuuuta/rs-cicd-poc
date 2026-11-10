@@ -133,7 +133,7 @@ class WorkflowGuardsTest(unittest.TestCase):
             }]
         }
         run = dict(id=10, run_attempt=1, conclusion="success", event="pull_request_target",
-                   path=".github/workflows/terraform-plan.yml", head_sha="b" * 40,
+                   path=".github/workflows/terraform-plan.yml", head_sha="a" * 40,
                    repository={"full_name": self.repository})
         github.request.side_effect = lambda path: run if path.startswith("actions/") else status
         workflow.require_successful_plan(github, "a" * 40, "b" * 40)
@@ -589,6 +589,22 @@ class TrustedRunnerTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("trusted_runner", path)
         self.runner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.runner)
+
+    def test_workflow_head_is_pr_head_not_base(self):
+        value = dict(repository="owner/repo", pr="4", head="a" * 40, base="b" * 40, run_id="10", attempt="1")
+        responses = [
+            dict(state="open", draft=False, head=dict(sha=value["head"], repo=dict(full_name=value["repository"])),
+                 base=dict(sha=value["base"], ref="main")),
+            dict(object=dict(sha=value["base"])),
+            dict(status="in_progress", run_attempt=1, head_sha=value["head"], event="pull_request_target",
+                 path=".github/workflows/terraform-plan.yml"),
+        ]
+        with mock.patch.object(self.runner, "urlopen", side_effect=[mock.mock_open(read_data=json.dumps(item))() for item in responses]):
+            self.runner.fresh_pr(value, "plan")
+        responses[-1]["head_sha"] = value["base"]
+        with mock.patch.object(self.runner, "urlopen", side_effect=[mock.mock_open(read_data=json.dumps(item))() for item in responses]):
+            with self.assertRaisesRegex(ValueError, "originating workflow"):
+                self.runner.fresh_pr(value, "plan")
 
     def test_embedded_buildspec_python_and_shell_are_valid(self):
         root = Path(__file__).resolve().parents[2]

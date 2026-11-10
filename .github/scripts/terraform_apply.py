@@ -293,7 +293,7 @@ def require_successful_plan(github, head_sha, base_sha):
         raise ValueError("The plan status has no trusted workflow execution.")
     run = github.request(f"actions/runs/{match[1]}")
     if (run.get("conclusion") != "success" or run.get("event") != "pull_request_target"
-            or run.get("path") != ".github/workflows/terraform-plan.yml" or run.get("head_sha") != base_sha
+            or run.get("path") != ".github/workflows/terraform-plan.yml" or run.get("head_sha") != head_sha
             or (run.get("repository") or {}).get("full_name") != github.repository):
         raise ValueError("The plan workflow did not succeed from the expected trusted base.")
     return str(run["id"]), str(run["run_attempt"])
