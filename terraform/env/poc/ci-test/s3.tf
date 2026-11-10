@@ -3,9 +3,10 @@ resource "aws_s3_bucket" "ci_test" {
   force_destroy = false
 
   tags = {
-    Project     = "rs-cicd-poc"
-    Environment = "poc"
-    ManagedBy   = "Terraform"
+    Project      = "rs-cicd-poc"
+    Environment  = "poc"
+    ManagedBy    = "Terraform"
+    Verification = "label-apply-poc"
   }
 }
 
