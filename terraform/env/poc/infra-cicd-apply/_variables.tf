@@ -15,6 +15,14 @@ variable "github_repository" {
   type = string
 }
 
+variable "github_repository_owner_id" {
+  type = string
+}
+
+variable "github_repository_id" {
+  type = string
+}
+
 variable "github_default_branch" {
   type    = string
   default = "main"

@@ -2,6 +2,10 @@ resource "aws_s3_bucket" "artifacts" {
   bucket        = var.artifact_bucket_name
   force_destroy = false
   tags          = local.tags
+
+  lifecycle {
+    ignore_changes = [tags["Owner"]]
+  }
 }
 
 resource "aws_s3_bucket_versioning" "artifacts" {

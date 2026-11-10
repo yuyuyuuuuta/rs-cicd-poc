@@ -7,8 +7,8 @@ terraform/
 └── env/
     └── poc/
         ├── ci-test/        # CI/CD の plan/apply 対象
-        ├── infra-cicd-plan/   # plan 基盤の配置先（未実装）
-        └── infra-cicd-apply/  # ci-test 専用 apply 基盤（コード実装済み）
+        ├── infra-cicd-plan/   # ci-test 専用 plan 基盤
+        └── infra-cicd-apply/  # ci-test 専用 apply 基盤
 ```
 
 `ci-test` と各 CI/CD 基盤は独立した Terraform root とし、State を分離します。対象 root ごとに専用 Pipeline を用意します。基盤自身は CI/CD 対象にせず、管理者が手動で構築・変更します。
@@ -21,7 +21,7 @@ terraform/
 | -------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
 | `bootstrap/state-bucket`   | S3、バージョニング、暗号化、公開ブロック、所有権設定        | ローカル `terraform.tfstate`                              |
 | `env/poc/ci-test`          | テスト用 S3、暗号化、公開ブロック、同バケットの data source | S3 `terraform/env/poc/ci-test/terraform.tfstate`          |
-| `env/poc/infra-cicd-plan`  | 役割の README のみ                                          | 未設定                                                    |
+| `env/poc/infra-cicd-plan`  | CodeConnections、plan Pipeline/CodeBuild、read-only role    | S3 `terraform/env/poc/infra-cicd-plan/terraform.tfstate`  |
 | `env/poc/infra-cicd-apply` | apply 基盤（14/14 作成済み、Connection AVAILABLE）          | S3 `terraform/env/poc/infra-cicd-apply/terraform.tfstate` |
 
 各 root の `_terraform.tf` は CLI・provider の制約、`_providers.tf` は接続先、`_backend.tf` は公開可能な State キー、`_variables.tf` は入力変数を定義します。実際のアカウント・リージョン・バケット名は、Git 管理外の `terraform.tfvars` と `backend.hcl` に置きます。ファイル名の `_` は読み込み順を制御しません。
@@ -44,6 +44,8 @@ terraform -chdir=terraform/env/poc/ci-test init -backend=false -input=false
 terraform -chdir=terraform/env/poc/ci-test validate
 terraform -chdir=terraform/env/poc/infra-cicd-apply init -backend=false -input=false
 terraform -chdir=terraform/env/poc/infra-cicd-apply validate
+terraform -chdir=terraform/env/poc/infra-cicd-plan init -backend=false -input=false
+terraform -chdir=terraform/env/poc/infra-cicd-plan validate
 ```
 
 ## 手動ブートストラップ
@@ -70,4 +72,4 @@ terraform -chdir=terraform/env/poc/ci-test plan
 
 旧 Connection は削除済みで、新しい Connection は GitHub 接続承認済みです。AWS API で AVAILABLE を確認しました。
 
-ログ管理・PassConnection 権限の更新後、apply 基盤は 14/14 リソースの構築が完了しました。State は S3 に保持し、Connection は AVAILABLE です。手動 GitHub Actions は実装・ローカル検証済みです。識別情報分離に伴う追加 Secret の登録が必要です。workflow の push、実際の OIDC 認証・Pipeline 起動・apply・自動マージは未実施です。設定と初回配置の手順は [env/poc/infra-cicd-apply/README.md](env/poc/infra-cicd-apply/README.md) を参照してください。
+apply 基盤は 14/14 リソース構築済みで、Connection は AVAILABLE です。PR 自動 plan と branch 指定 apply workflow を実装しています。plan 基盤 Terraform は validate と 13 resource create plan まで検証済みですが、AWS apply と新 workflow 実行は未実施です。手順は [plan 基盤 README](env/poc/infra-cicd-plan/README.md) と [apply 基盤 README](env/poc/infra-cicd-apply/README.md) を参照してください。

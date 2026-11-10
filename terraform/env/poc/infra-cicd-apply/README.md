@@ -48,11 +48,11 @@ CodeConnections、CodePipeline、CodeBuild、IAM、S3、CloudWatch Logs の構�
 
 | 範囲                 | 整理内容                                                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| S3                   | 新 PoC の State、apply 成果物、ci-test の 3 バケットに限定。バケット操作とオブジェクト操作を分離                          |
+| S3                   | 新 PoC の State、plan/apply 成果物、ci-test の 4 バケットに限定。バケット操作とオブジェクト操作を分離                     |
 | Pipeline / CodeBuild | 非公開設定のリージョンとリソース名プレフィックスに限定。旧 plan 専用権限と重複する一覧権限を除去                          |
 | Connection           | 作成は GitHub・対象リージョンに限定。管理と PassConnection は作成済み Connection に限定し、引き渡し先は CodePipeline のみ |
 | Connection タグ      | 作成時は ARN が未確定なので、対象アカウント・リージョンの Connection ARN に限定してタグ付けを許可                         |
-| Logs                 | 現在の apply ロググループの作成・保存期間・タグ・削除権限を統合                                                           |
+| Logs                 | plan/apply の各ロググループの作成・保存期間・タグ・削除権限を限定                                                         |
 | サービス一覧         | Resource を指定できない API は `Resource: "*"` とし、RequestedRegion 条件で対象リージョンに限定                           |
 
 旧バケットの削除・旧 CodeBuild のビルド参照・削除済み Connection 専用権限は除去しました。旧 policy の `ListConnections` は一覧 API に不適合な Resource 指定だったため、リージョン条件付き一覧権限に修正しています。この API はリポジトリ単位の一覧制限をできず、同リージョンの Connection 一覧を参照できます。
@@ -77,7 +77,7 @@ Connection を作り直す場合は、作成直後に PENDING になります。
 
 ## 後続の GitHub 設定
 
-既存の OIDC ロール ARN に加えて、次の全 6 Secret を Settings → Secrets and variables → Actions → New repository secret に設定してください。実値は Git 管理外の `admin/github-secrets.local.json` に保持しています。新しい作業環境では [設定テンプレート](../../../../admin/github-secrets.local.json.example) を使用します。識別情報や認証情報をチャットへ貼り付ける必要はありません。
+apply 用 6 Secrets と plan 用 3 Secrets を Settings → Secrets and variables → Actions → New repository secret に設定してください。実値は Git 管理外の `admin/github-secrets.local.json` に保持しています。新しい作業環境では [設定テンプレート](../../../../admin/github-secrets.local.json.example) を使用します。識別情報や認証情報をチャットへ貼り付ける必要はありません。
 
 | Secret 名                     | 値の取得元                                                                                         |
 | ----------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -87,14 +87,17 @@ Connection を作り直す場合は、作成直後に PENDING になります。
 | `TF_STATE_BUCKET`             | 非公開 tfvars の `state_bucket_name`                                                               |
 | `TF_TEST_BUCKET`              | 非公開 tfvars の `test_bucket_name`                                                                |
 | `TF_PIPELINE_NAMES`           | root パスをキー、Pipeline 名を値とする JSON。例: `{"terraform/env/poc/ci-test":"<PIPELINE_NAME>"}` |
+| `AWS_GITHUB_PLAN_ROLE_ARN`    | plan 基盤の `terraform output -raw github_plan_role_arn`                                           |
+| `TF_PLAN_ARTIFACT_BUCKET`     | plan 基盤の非公開 tfvars の `artifact_bucket_name`                                                 |
+| `TF_PLAN_PIPELINE_NAMES`      | root パスから plan Pipeline 名への JSON map                                                        |
 
-`TF_PIPELINE_NAMES` の実 Pipeline 名は `terraform output -json pipeline_names` で管理者が確認します。出力のキーは `ci-test` なので、Secret のキーには実パス `terraform/env/poc/ci-test` を指定してください。JSON 文字列を Secret の値として登録します。
+`TF_PIPELINE_NAMES` と `TF_PLAN_PIPELINE_NAMES` の実 Pipeline 名は各 root の `terraform output -json pipeline_names` で管理者が確認します。出力のキー `ci-test` は JSON Secret では実パス `terraform/env/poc/ci-test` に対応付けます。JSON 文字列として登録してください。
 
 長期 AWS アクセスキー、Secret Access Key、セッショントークンは登録しません。認証は OIDC で行います。GitHub 操作用の `GITHUB_TOKEN` は Actions 実行時に自動提供されます。リポジトリの設定・組織ポリシーで、使用 action とマージ専用ジョブの書き込み権限が許可されている必要があります。
 
 静的検証ジョブには識別情報 Secrets を渡しません。AWS ジョブの trusted なコードだけが設定確認と起動・ログ取得を行います。CodeBuild には管理者が Terraform で登録した環境変数として識別情報を渡します。これらの値と State は AWS 側で非公開管理し、Git に含めません。
 
-OIDC の信頼条件は `repo:<OWNER>/<REPOSITORY>:environment:terraform-apply` です。実際のリポジトリは非公開 tfvars から設定します。この信頼条件は AWS に反映済みで、更新後の plan は差分なしです。Environment subject にはブランチ名が含まれないため、次の deployment branch 制限が必須です。カスタム subject を使う場合も実際の subject に合わせて変更してください。
+GitHub repository は immutable subject 形式を使用します。apply role は `repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:environment:terraform-apply`、plan role は同じ prefix の `:pull_request` subject を信頼します。ID は Git 管理外の tfvars に保持します。OIDC 信頼条件を変更した場合は、Terraform plan で対象が role trust policy の更新だけであることを確認してから apply してください。Environment subject には branch 名が含まれないため、apply Environment の deployment branch を `main` だけに制限してください。
 
 ## Apply 前の承認設定
 
@@ -107,7 +110,7 @@ GitHub の Settings → Environments → New environment で、Environment `terr
 
 workflow の `environment` 指定だけでは Required reviewers は設定されません。存在しない Environment が自動作成されたり、保護ルールが未設定だったりすると、承認待ちにならず進む場合があります。Required reviewers と branch 制限を確認してから実行してください。
 
-既存の 6 つの Repository Secrets はそのまま使えます。Environment Secrets へ移動する必要はありません。同じ名前の Environment Secret を作成した場合は Environment 側が優先されるため、意図せず値を上書きしないでください。
+既存の apply 用 6 Repository Secrets はそのまま使えます。plan 基盤構築後に追加する 3 plan Secrets は Repository Secrets として登録します。Environment Secrets へ移動する必要はありません。同じ名前の Environment Secret を作成した場合は Environment 側が優先されるため、意図せず値を上書きしないでください。
 
 実行順は `inspect` → `static-checks` → Environment 承認待ち → `aws-apply` → `merge` です。Environment 承認前は AWS ジョブの runner とステップは開始されず、OIDC 認証・Pipeline 起動は行いません。却下された場合も apply と自動マージは行いません。承認待ちの間に PR HEAD/base が変わった場合は、承認後の再確認で Pipeline 起動を止めます。
 
@@ -115,17 +118,19 @@ workflow の `environment` 指定だけでは Required reviewers は設定され
 
 今回の承認ゲート変更は基盤変更 PR として手動で main にマージしてください。作業中の `ci-test` の検証用タグ変更を同じ PR に含めず、承認ゲートを反映した後の別 PR にします。AWS の OIDC はすでに Environment subject に切り替えているため、変更を main に反映するまでは古い workflow を起動しないでください。
 
-## 手動 Workflow
+## PR Plan と手動 Apply
 
-workflow は [.github/workflows/terraform-apply.yml](../../../../.github/workflows/terraform-apply.yml)、補助コードは [.github/scripts/terraform_apply.py](../../../../.github/scripts/terraform_apply.py) です。`workflow_dispatch` だけを使用し、PR 作成・push では起動しません。現在の登録対象は `ci-test` だけです。
+自動 plan は [.github/workflows/terraform-plan.yml](../../../../.github/workflows/terraform-plan.yml)、手動 apply は [.github/workflows/terraform-apply.yml](../../../../.github/workflows/terraform-apply.yml) です。共通補助コードは [.github/scripts/terraform_apply.py](../../../../.github/scripts/terraform_apply.py) で、登録対象は `ci-test` だけです。
 
-1. 管理者がコードをレビューして `main` に反映し、上記の Environment 保護ルールを設定します。初回配置用 PR や承認ゲート変更などの基盤 PR を apply workflow でマージしようとしないでください。
-2. `terraform/env/poc/ci-test/` を変更する同一リポジトリの PR を、`main` 向けに作成します。共同変更を許可する対象外ファイルはルート README と Terraform 全体 README だけです。基盤、IAM、workflow、未登録 root の変更を含めると停止します。
-3. Actions → `Terraform apply PR (manual)` → Run workflow で Branch に `main`、`pr_number` に対象 PR 番号を指定します。起動時点の `main` が進んでいた場合や GitHub が mergeability を計算中の場合は、情報が確定してから再実行します。
-4. `inspect` が open・非 draft・同一リポジトリ・マージ可能性を確認します。`static-checks` は AWS 権限なしで固定 SHA を checkout し、fmt・backend 無効 init・validate を実行します。provider lock の変更は自動許可せず、PR の lock ファイルを使用します。
-5. Environment `terraform-apply` の Required reviewers が許可すると `aws-apply` が開始します。trusted な `main` の補助コードだけを実行し、OIDC 認証と AWS アカウント照合後、SHA override 付きで専用 Pipeline を起動します。Pipeline 成功後も、SourceOutput の revision SHA と CodeBuild 成功を確認します。
-6. CloudWatch Logs を全ページ取得し、マーカー間のログを Summary に掲載します。空行・ANSI 色を除去し、大きいログは表示を切り詰めます。ログ取得失敗やマーカー不足でもマージしません。
-7. `merge` 専用ジョブが PR HEAD と base を再確認し、GitHub の merge API に適用済み HEAD SHA を指定してマージします。ブランチ保護を迂回する API や管理者オプションは使用しません。
+1. 管理者が plan 基盤 Terraform を構築し、plan 用 OIDC role ARN、artifact bucket、plan pipeline map の 3 Repository Secrets を追加します。公開 PR の plan は AWS の read-only role だけを使います。
+2. `terraform/env/poc/ci-test/` を変更する PR を `main` に作成します。`pull_request_target` の自動 workflow は trusted な base SHA の helper を起動し、PR 本体のコードは AWS 権限なしの fmt/validate job だけで checkout します。fork PR、基盤や workflow の変更、未登録 root は AWS plan に進めません。
+3. static checks が成功すると `aws-plan` が OIDC で plan role を引き受け、CodeConnections に PR head SHA を指定して plan Pipeline を起動します。取得した Source commit SHA も CodeBuild が照合します。plan log は GitHub Actions Summary に整形して表示されます。
+4. 完了後、head commit に `Terraform plan` status が記録されます。status description に PR base SHA を含め、失敗・timeout・log取得失敗時は failure status にします。
+5. apply は手動です。Actions → `Terraform apply PR (manual)` → Run workflow で Branch に `main`、入力 `pr_branch` に PR の source branch 名を指定します。PR 番号の入力は不要です。branch から open・同一 repo・base main の PR を一意に解決し、current head/base と成功 plan status を検証します。
+6. static checks の後 `terraform-apply` Environment の承認待ちへ進みます。承認後にだけ AWS apply job が開始され、head/base と成功 plan status を再検証して apply Pipeline を実行します。
+7. plan/apply とも CodeBuild の CloudWatch Logs を全ページ取得し、マーカー間ログを Summary に表示します。apply 成功後は PR branch/head/base/成功 plan status を再検証して PR を自動マージします。失敗や log retrieval error はマージされません。
+
+workflow の base を更新・push する PR 自体は apply workflow の対象にしません。workflow change を `main` に反映し、plan 基盤と追加 Secrets を設定してから、次の対象 root PR で確認してください。
 
 workflow 全体をリポジトリ単位で直列化し、実行中の apply を新しい起動でキャンセルしない設定です。GitHub concurrency の待機枠には上限があるため、連続起動時は未実行の待機 run が置き換わる場合があります。Pipeline 側も root ごとの QUEUED モードで直列化しています。
 
@@ -143,4 +148,4 @@ GitHub API は HEAD SHA の一致をマージ時に検証しますが、base の
 python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 ```
 
-35 テストと actionlint で検証済みです。PR 判定、SHA 更新時の停止、Pipeline 待機、ログのページング、取得失敗時の停止、固定 SHA マージ、Secret の設定確認と識別子のマスキングに加え、公開ファイルのアカウント ID・認証情報の混入を検査します。CodeBuild の環境変数更新は反映済みで、更新後の plan は差分なしです。実際の OIDC・PR コミット取得・apply・自動マージは、追加 Secret の登録と main への初回配置後に別途検証します。plan 基盤は未実装です。
+49 テストと actionlint で検証済みです。PR 判定、branch 紐付け、plan status 照合、SHA 更新時の停止、Pipeline 待機、ログのページング、取得失敗時の停止、固定 SHA マージ、識別子マスキングを模擬します。plan 基盤 Terraform は validate と read-only plan で検証済みですが、AWS apply と新 workflow 実行は未実施です。CodeBuild の非公開入力設定は反映済みで、apply infrastructure の plan は OIDC trust role 更新だけです。plan 基盤の構築時はさらに artifact bucket と plan log group が追加されます。

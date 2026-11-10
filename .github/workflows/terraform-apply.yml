@@ -1,11 +1,11 @@
 name: Terraform apply PR (manual)
-run-name: "Terraform apply PR #${{ inputs.pr_number }}"
+run-name: "Terraform apply ${{ inputs.pr_branch }}"
 
 on:
   workflow_dispatch:
     inputs:
-      pr_number:
-        description: PR number to validate, apply, and merge
+      pr_branch:
+        description: Source branch of the open PR with a successful automatic plan
         required: true
         type: string
 
@@ -19,7 +19,7 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   AWS_PAGER: ""
-  PR_NUMBER: ${{ inputs.pr_number }}
+  PR_BRANCH: ${{ inputs.pr_branch }}
 
 jobs:
   inspect:
@@ -29,6 +29,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      pr_branch: ${{ steps.pr.outputs.pr_branch }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       targets: ${{ steps.pr.outputs.targets }}
@@ -43,7 +45,7 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/terraform_apply.py prepare
+        run: python3 .github/scripts/terraform_apply.py prepare-apply
 
   static-checks:
     needs: inspect
@@ -91,6 +93,8 @@ jobs:
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
       TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+      PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
+      PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -116,6 +120,8 @@ jobs:
         id: apply
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
@@ -136,6 +142,8 @@ jobs:
       - name: Merge only the successfully applied PR head
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
+          PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.aws-apply.outputs.applied_head }}
           EXPECTED_BASE_SHA: ${{ needs.aws-apply.outputs.applied_base }}
         run: python3 .github/scripts/terraform_apply.py merge

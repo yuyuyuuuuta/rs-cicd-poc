@@ -8,11 +8,13 @@ import subprocess
 import sys
 import time
 from urllib.error import HTTPError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
 TARGETS = {"terraform/env/poc/ci-test"}
 DOC_PATHS = {"README.md", "terraform/README.md"}
+PLAN_STATUS_CONTEXT = "Terraform plan"
 
 
 def validate_pr(pr, repository, expected_head=None, expected_base=None):
@@ -51,11 +53,11 @@ def select_targets(paths):
     return sorted(selected)
 
 
-def extract_apply_log(messages, root):
+def extract_terraform_log(messages, root, phase):
     text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", messages)
     lines = text.splitlines()
-    begin = f"=== TERRAFORM_APPLY_BEGIN:{root} ==="
-    end = f"=== TERRAFORM_APPLY_END:{root} ==="
+    begin = f"=== TERRAFORM_{phase.upper()}_BEGIN:{root} ==="
+    end = f"=== TERRAFORM_{phase.upper()}_END:{root} ==="
     try:
         start = lines.index(begin) + 1
         stop = lines.index(end, start)
@@ -67,6 +69,10 @@ def extract_apply_log(messages, root):
         if line.strip() or (result and result[-1]):
             result.append(line.rstrip())
     return "\n".join(result).strip()
+
+
+def extract_apply_log(messages, root):
+    return extract_terraform_log(messages, root, "apply")
 
 
 def fenced_log(text, limit=60000):
@@ -92,23 +98,35 @@ def summary(text):
 
 
 def pipeline_names():
-    names = json.loads(os.environ["TF_PIPELINE_NAMES"])
+    return parse_pipeline_names(os.environ["TF_PIPELINE_NAMES"], "TF_PIPELINE_NAMES")
+
+
+def plan_pipeline_names():
+    return parse_pipeline_names(os.environ["TF_PLAN_PIPELINE_NAMES"], "TF_PLAN_PIPELINE_NAMES")
+
+
+def parse_pipeline_names(value, setting_name):
+    names = json.loads(value)
     if not isinstance(names, dict) or set(names) != TARGETS:
-        raise ValueError("TF_PIPELINE_NAMES must map every registered root to its Pipeline name.")
+        raise ValueError(f"{setting_name} must map every registered root to its Pipeline name.")
     if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9.@_-]{1,100}", name) for name in names.values()):
-        raise ValueError("Invalid Pipeline name in TF_PIPELINE_NAMES.")
+        raise ValueError(f"Invalid Pipeline name in {setting_name}.")
     return names
 
 
 def redact_identifiers(text):
     values = {
         os.environ.get(name, "")
-        for name in ("AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "AWS_GITHUB_ACTIONS_ROLE_ARN")
+        for name in (
+            "AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET",
+            "AWS_GITHUB_ACTIONS_ROLE_ARN", "AWS_GITHUB_PLAN_ROLE_ARN",
+        )
     }
     try:
-        names = json.loads(os.environ.get("TF_PIPELINE_NAMES", "{}"))
-        if isinstance(names, dict):
-            values.update(name for name in names.values() if isinstance(name, str))
+        for env_name in ("TF_PIPELINE_NAMES", "TF_PLAN_PIPELINE_NAMES"):
+            names = json.loads(os.environ.get(env_name, "{}"))
+            if isinstance(names, dict):
+                values.update(name for name in names.values() if isinstance(name, str))
     except ValueError:
         pass
     text = re.sub(r"arn:(?:aws|aws-us-gov|aws-cn):[^\s`\"<>]+", "[REDACTED_ARN]", text)
@@ -198,6 +216,60 @@ def target_roots():
     return roots
 
 
+def pr_branch():
+    branch = os.environ["PR_BRANCH"]
+    if (
+        not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", branch)
+        or branch.startswith("-")
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or ".." in branch
+        or "//" in branch
+    ):
+        raise ValueError("PR_BRANCH must be a valid source branch name.")
+    return branch
+
+
+def find_open_pr_by_branch(github, branch):
+    owner = github.repository.split("/", 1)[0]
+    head = quote(f"{owner}:{branch}", safe="")
+    pull_requests = github.request(f"pulls?state=open&base=main&head={head}&per_page=100")
+    matches = [
+        pr for pr in pull_requests
+        if pr.get("head", {}).get("ref") == branch
+        and (pr.get("head", {}).get("repo") or {}).get("full_name") == github.repository
+    ]
+    if len(matches) != 1:
+        raise ValueError("The source branch must identify exactly one open, same-repository PR targeting main.")
+    return matches[0]
+
+
+def latest_plan_status(github, head_sha):
+    response = github.request(f"commits/{head_sha}/status")
+    matches = [item for item in response.get("statuses", []) if item.get("context") == PLAN_STATUS_CONTEXT]
+    if not matches:
+        raise ValueError("No automatic Terraform plan status exists for the current PR head.")
+    return max(matches, key=lambda item: item.get("created_at", ""))
+
+
+def require_successful_plan(github, head_sha, base_sha):
+    status = latest_plan_status(github, head_sha)
+    expected_description = f"Plan passed for base {base_sha}"
+    if status.get("state") != "success" or status.get("description") != expected_description:
+        raise ValueError("A successful automatic plan for the current PR head and base is required before apply.")
+
+
+def set_plan_status(github, head_sha, state, description, target_url=None):
+    payload = {
+        "state": state,
+        "context": PLAN_STATUS_CONTEXT,
+        "description": description[:140],
+    }
+    if target_url:
+        payload["target_url"] = target_url
+    return github.request(f"statuses/{head_sha}", method="POST", data=payload)
+
+
 def snapshot(github, number, expected_head=None, expected_base=None):
     pr = github.request(f"pulls/{number}")
     head, base = validate_pr(pr, github.repository, expected_head, expected_base)
@@ -207,16 +279,45 @@ def snapshot(github, number, expected_head=None, expected_base=None):
     return pr, head, base
 
 
-def prepare():
-    if os.environ["GITHUB_REF"] != "refs/heads/main":
-        raise ValueError("Dispatch this workflow from main, not from a PR branch.")
+def prepare_plan():
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request_target":
+        raise ValueError("Automatic planning must use the trusted pull_request_target workflow.")
     github = GitHub()
-    pr, head, base = snapshot(github, pr_number(), expected_base=os.environ["GITHUB_SHA"])
-    roots = select_targets(github.files(pr_number(), pr["changed_files"]))
+    number = pr_number()
+    pr, head, base = snapshot(
+        github,
+        number,
+        expected_head=os.environ["EVENT_PR_HEAD_SHA"],
+        expected_base=os.environ["EVENT_PR_BASE_SHA"],
+    )
+    roots = select_targets(github.files(number, pr["changed_files"]))
+    set_plan_status(github, head, "pending", f"Plan is running for base {base}")
+    output("pr_number", number)
     output("head_sha", head)
     output("base_sha", base)
     output("targets", roots)
-    summary(f"## Terraform apply preflight\nPR: #{pr_number()}\n\nCommit: `{head}`\n\nTargets: {', '.join(roots)}")
+    output("pr_branch", pr["head"]["ref"])
+    summary(f"## Terraform plan\nPR: #{number}\n\nCommit: `{head}`\n\nTargets: {', '.join(roots)}")
+
+
+def prepare_apply():
+    if os.environ["GITHUB_REF"] != "refs/heads/main":
+        raise ValueError("Dispatch this workflow from main; select the PR source branch in the input.")
+    github = GitHub()
+    pr = find_open_pr_by_branch(github, pr_branch())
+    number = str(pr["number"])
+    head, base = validate_pr(pr, github.repository)
+    current_main = github.request("git/ref/heads/main")["object"]["sha"]
+    if base != current_main:
+        raise ValueError("The PR base is not the current main commit; update the PR and wait for a new plan.")
+    roots = select_targets(github.files(number, pr["changed_files"]))
+    require_successful_plan(github, head, base)
+    output("pr_number", number)
+    output("head_sha", head)
+    output("base_sha", base)
+    output("targets", roots)
+    output("pr_branch", pr["head"]["ref"])
+    summary(f"## Terraform apply preflight\nPR: #{number}\n\nBranch: `{pr['head']['ref']}`\n\nCommit: `{head}`\n\nTargets: {', '.join(roots)}")
 
 
 def validate():
@@ -271,7 +372,7 @@ def read_log_events(aws, group, stream):
     raise ValueError("CloudWatch Logs exceeded the pagination limit.")
 
 
-def report_execution(aws, pipeline, execution_id, root):
+def report_execution(aws, pipeline, execution_id, root, phase="apply"):
     actions = []
     token = None
     for _ in range(100):
@@ -285,9 +386,14 @@ def report_execution(aws, pipeline, execution_id, root):
             break
     else:
         raise ValueError("Pipeline action pagination limit exceeded.")
-    builds = [action for action in actions if action.get("actionName") == "TerraformApply" and action.get("stageName") == "Apply"]
+    action_name = "TerraformPlan" if phase == "plan" else "TerraformApply"
+    stage_name = "Plan" if phase == "plan" else "Apply"
+    builds = [
+        action for action in actions
+        if action.get("actionName") == action_name and action.get("stageName") == stage_name
+    ]
     if not builds:
-        raise ValueError("No TerraformApply CodeBuild action was found; inspect the Source stage.")
+        raise ValueError(f"No {action_name} CodeBuild action was found; inspect the Source stage.")
     action = max(builds, key=lambda item: item.get("startTime", ""))
     build_id = action.get("output", {}).get("executionResult", {}).get("externalExecutionId")
     if not build_id:
@@ -300,38 +406,45 @@ def report_execution(aws, pipeline, execution_id, root):
     for attempt in range(3):
         messages = read_log_events(aws, group, stream)
         try:
-            text = extract_apply_log(messages, root)
+            text = extract_terraform_log(messages, root, phase)
             break
         except ValueError:
             if attempt == 2:
-                summary("### Terraform apply log markers missing\n" + fenced_log("\n".join(messages.splitlines()[-40:])))
+                summary(f"### Terraform {phase} log markers missing\n" + fenced_log("\n".join(messages.splitlines()[-40:])))
                 raise
             time.sleep(2)
-    summary(f"### Terraform apply: {root}\nBuild: `{build_id}`\n\n" + fenced_log(text))
+    summary(f"### Terraform {phase}: {root}\nBuild: `{build_id}`\n\n" + fenced_log(text))
     if build.get("buildStatus") != "SUCCEEDED":
         raise ValueError(f"CodeBuild did not succeed: {build.get('buildStatus')}")
 
 
-def apply():
+def execute_pipelines(phase):
     github = GitHub()
     aws = Aws()
     number = pr_number()
+    pr = find_open_pr_by_branch(github, pr_branch())
+    if str(pr["number"]) != number:
+        raise ValueError("The PR resolved from the source branch changed before execution.")
     head = os.environ["EXPECTED_HEAD_SHA"]
     base = os.environ["EXPECTED_BASE_SHA"]
-    names = pipeline_names()
+    names = plan_pipeline_names() if phase == "plan" else pipeline_names()
     snapshot(github, number, head, base)
+    if phase == "apply":
+        require_successful_plan(github, head, base)
     for root in target_roots():
         snapshot(github, number, head, base)
+        if phase == "apply":
+            require_successful_plan(github, head, base)
         pipeline = names[root]
         target_hash = hashlib.sha256(root.encode()).hexdigest()[:10]
-        request_token = f"gh-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}-{target_hash}"
+        request_token = f"gh-{phase}-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}-{target_hash}"
         execution_id = aws.call(
             "codepipeline", "start-pipeline-execution", name=pipeline,
             client_request_token=request_token,
             source_revisions=[{"actionName": "Source", "revisionType": "COMMIT_ID", "revisionValue": head}],
             variables=[{"name": "PrCommitSha", "value": head}],
         )["pipelineExecutionId"]
-        summary(f"## AWS Terraform apply\nRoot: `{root}`\n\nExecution: `{execution_id}`")
+        summary(f"## AWS Terraform {phase}\nRoot: `{root}`\n\nExecution: `{execution_id}`")
         failure = None
         try:
             execution = wait_pipeline(aws, pipeline, execution_id)
@@ -345,7 +458,7 @@ def apply():
             failure = error
             summary("Pipeline completion or revision verification failed; automatic merge is blocked.")
         try:
-            report_execution(aws, pipeline, execution_id, root)
+            report_execution(aws, pipeline, execution_id, root, phase)
         except Exception as error:
             summary("Log retrieval or build verification failed; automatic merge is blocked.")
             if failure is None:
@@ -353,28 +466,71 @@ def apply():
         if failure is not None:
             raise failure
     snapshot(github, number, head, base)
-    output("applied_head", head)
-    output("applied_base", base)
+    if phase == "apply":
+        output("applied_head", head)
+        output("applied_base", base)
+    else:
+        output("planned_head", head)
+        output("planned_base", base)
+
+
+def plan():
+    execute_pipelines("plan")
+
+
+def apply():
+    execute_pipelines("apply")
+
+
+def finalize_plan_status():
+    head = os.environ.get("PLAN_HEAD_SHA", "")
+    base = os.environ.get("PLAN_BASE_SHA", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", head) or not re.fullmatch(r"[0-9a-f]{40}", base):
+        return
+    success = all(
+        os.environ.get(name) == "success"
+        for name in ("PREFLIGHT_RESULT", "STATIC_CHECK_RESULT", "PLAN_RESULT")
+    )
+    state = "success" if success else "failure"
+    description = f"Plan passed for base {base}" if success else "Automatic Terraform plan failed; review the workflow run"
+    set_plan_status(GitHub(), head, state, description, os.environ.get("PLAN_RUN_URL"))
+    summary(f"Terraform plan status for `{head}`: **{state}**")
 
 
 def merge():
     github = GitHub()
     head = os.environ["EXPECTED_HEAD_SHA"]
-    snapshot(github, pr_number(), head, os.environ["EXPECTED_BASE_SHA"])
+    pr = find_open_pr_by_branch(github, pr_branch())
+    number = str(pr["number"])
+    snapshot(github, number, head, os.environ["EXPECTED_BASE_SHA"])
+    require_successful_plan(github, head, os.environ["EXPECTED_BASE_SHA"])
     result = github.request(
-        f"pulls/{pr_number()}/merge", method="PUT", data={"sha": head, "merge_method": "merge"},
+        f"pulls/{number}/merge", method="PUT", data={"sha": head, "merge_method": "merge"},
     )
     if not result.get("merged"):
         raise ValueError("GitHub rejected the merge; branch protection is not bypassed.")
-    summary(f"## PR merged\nPR: #{pr_number()}\n\nApplied commit: `{head}`\n\nMerge commit: `{result['sha']}`")
+    summary(f"## PR merged\nPR: #{number}\n\nApplied commit: `{head}`\n\nMerge commit: `{result['sha']}`")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("prepare", "validate", "apply", "merge", "check-config"))
+    parser.add_argument(
+        "command",
+        choices=("prepare-plan", "prepare-apply", "validate", "plan", "finalize-plan-status", "apply", "merge", "check-config", "check-plan-config"),
+    )
     command = parser.parse_args().command
     try:
-        {"prepare": prepare, "validate": validate, "apply": apply, "merge": merge, "check-config": check_config}[command]()
+        {
+            "prepare-plan": prepare_plan,
+            "prepare-apply": prepare_apply,
+            "validate": validate,
+            "plan": plan,
+            "finalize-plan-status": finalize_plan_status,
+            "apply": apply,
+            "merge": merge,
+            "check-config": check_config,
+            "check-plan-config": check_plan_config,
+        }[command]()
     except Exception as error:
         print(redact_identifiers(f"Workflow failed: {error}"), file=sys.stderr)
         return 1
@@ -397,6 +553,27 @@ def check_config():
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", os.environ[name]):
             raise ValueError("Invalid bucket name Secret.")
     pipeline_names()
+
+
+def check_plan_config():
+    required = (
+        "AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET",
+        "AWS_GITHUB_PLAN_ROLE_ARN", "TF_PLAN_PIPELINE_NAMES",
+    )
+    if any(not os.environ.get(name) for name in required):
+        raise ValueError("Required GitHub plan configuration is missing; see the configuration guide.")
+    account = os.environ["AWS_ACCOUNT_ID"]
+    if not re.fullmatch(r"[0-9]{12}", account):
+        raise ValueError("Invalid AWS_ACCOUNT_ID secret.")
+    role = os.environ["AWS_GITHUB_PLAN_ROLE_ARN"]
+    if not re.fullmatch(r"arn:aws:iam::" + account + r":role/[A-Za-z0-9_+=,.@/-]+", role):
+        raise ValueError("The plan role ARN does not match the configured account.")
+    if not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", os.environ["AWS_REGION"]):
+        raise ValueError("Invalid AWS_REGION secret.")
+    for name in ("TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET"):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", os.environ[name]):
+            raise ValueError(f"Invalid {name} secret.")
+    plan_pipeline_names()
 
 
 if __name__ == "__main__":

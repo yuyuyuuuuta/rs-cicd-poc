@@ -18,6 +18,7 @@
       "Resource": [
         "arn:aws:s3:::<TF_STATE_BUCKET>",
         "arn:aws:s3:::<ARTIFACT_BUCKET>",
+        "arn:aws:s3:::<PLAN_ARTIFACT_BUCKET>",
         "arn:aws:s3:::<TF_TEST_BUCKET>"
       ]
     },
@@ -28,6 +29,7 @@
       "Resource": [
         "arn:aws:s3:::<TF_STATE_BUCKET>/*",
         "arn:aws:s3:::<ARTIFACT_BUCKET>/*",
+        "arn:aws:s3:::<PLAN_ARTIFACT_BUCKET>/*",
         "arn:aws:s3:::<TF_TEST_BUCKET>/*"
       ]
     },
@@ -98,7 +100,9 @@
       ],
       "Resource": [
         "arn:aws:logs:<AWS_REGION>:<AWS_ACCOUNT_ID>:log-group:<APPLY_LOG_GROUP>",
-        "arn:aws:logs:<AWS_REGION>:<AWS_ACCOUNT_ID>:log-group:<APPLY_LOG_GROUP>:*"
+        "arn:aws:logs:<AWS_REGION>:<AWS_ACCOUNT_ID>:log-group:<APPLY_LOG_GROUP>:*",
+        "arn:aws:logs:<AWS_REGION>:<AWS_ACCOUNT_ID>:log-group:<PLAN_LOG_GROUP>",
+        "arn:aws:logs:<AWS_REGION>:<AWS_ACCOUNT_ID>:log-group:<PLAN_LOG_GROUP>:*"
       ]
     }
   ]
