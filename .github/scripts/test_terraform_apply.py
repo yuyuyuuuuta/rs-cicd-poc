@@ -29,6 +29,30 @@ class WorkflowGuardsTest(unittest.TestCase):
     def test_open_same_repository_pr(self):
         self.assertEqual(validate_pr(self.pr, self.repository), ("a" * 40, "b" * 40))
 
+    def test_snapshot_retries_pending_mergeability(self):
+        github = mock.Mock(repository=self.repository)
+        github.request.side_effect = [dict(self.pr, mergeable=None), self.pr, {"object": {"sha": "b" * 40}}]
+        with mock.patch.object(workflow.time, "sleep") as pause:
+            _, head, base = workflow.snapshot(github, "5", "a" * 40, "b" * 40)
+        self.assertEqual((head, base), ("a" * 40, "b" * 40))
+        pause.assert_called_once_with(2)
+
+    def test_snapshot_does_not_retry_real_conflicts(self):
+        github = mock.Mock(repository=self.repository)
+        github.request.return_value = dict(self.pr, mergeable=False)
+        with mock.patch.object(workflow.time, "sleep") as pause, self.assertRaises(ValueError):
+            workflow.snapshot(github, "5")
+        pause.assert_not_called()
+        github.request.assert_called_once_with("pulls/5")
+
+    def test_snapshot_pending_mergeability_has_a_retry_limit(self):
+        github = mock.Mock(repository=self.repository)
+        github.request.return_value = dict(self.pr, mergeable=None)
+        with mock.patch.object(workflow.time, "sleep") as pause, self.assertRaises(ValueError):
+            workflow.snapshot(github, "5")
+        self.assertEqual(pause.call_count, 3)
+        self.assertEqual(github.request.call_count, 4)
+
     def test_reject_unsafe_pr_metadata(self):
         for field, value in (("state", "closed"), ("draft", True), ("mergeable", False), ("mergeable", None)):
             with self.subTest(field=field, value=value):

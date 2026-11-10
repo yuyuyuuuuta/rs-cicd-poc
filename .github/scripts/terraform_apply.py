@@ -326,6 +326,11 @@ def set_plan_status(github, head_sha, state, description, target_url=None):
 
 def snapshot(github, number, expected_head=None, expected_base=None):
     pr = github.request(f"pulls/{number}")
+    for attempt in range(3):
+        if pr.get("mergeable") is not None:
+            break
+        time.sleep(2)
+        pr = github.request(f"pulls/{number}")
     head, base = validate_pr(pr, github.repository, expected_head, expected_base)
     current_main = github.request("git/ref/heads/main")["object"]["sha"]
     if base != current_main:
