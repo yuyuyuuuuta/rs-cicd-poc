@@ -629,8 +629,8 @@ def merge():
     if number != pr_number():
         raise ValueError("The branch now identifies a different PR; automatic merge is blocked.")
     current, _, _ = snapshot(github, number, head, os.environ["EXPECTED_BASE_SHA"])
-    if current.get("mergeable_state") != "clean":
-        raise ValueError("PR checks, reviews or mergeability are not clean; no bypass will be attempted.")
+    if current.get("mergeable_state") not in ("clean", "unstable"):
+        raise ValueError("PR mergeability is blocked; no bypass will be attempted.")
     require_successful_plan(github, head, os.environ["EXPECTED_BASE_SHA"])
     result = github.request(
         f"pulls/{number}/merge", method="PUT", data={"sha": head, "merge_method": "merge"},

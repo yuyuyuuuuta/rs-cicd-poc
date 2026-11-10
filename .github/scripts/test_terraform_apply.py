@@ -455,6 +455,15 @@ class ApplyAndMergeTest(unittest.TestCase):
             workflow.merge()
         self.patches["GitHub"].return_value.request.assert_not_called()
 
+    def test_unstable_mergeability_defers_required_checks_to_github(self):
+        self.patches["snapshot"].return_value = ({"mergeable_state": "unstable"}, "a" * 40, "b" * 40)
+        github = self.patches["GitHub"].return_value
+        github.request.return_value = {"merged": True, "sha": "d" * 40}
+        workflow.merge()
+        github.request.assert_called_once_with(
+            "pulls/7/merge", method="PUT", data={"sha": "a" * 40, "merge_method": "merge"},
+        )
+
     def test_one_module_failure_still_collects_other_module_results(self):
         roots = ["terraform/env/poc/ci-test", "terraform/env/poc/other"]
         environment = dict(TARGET_ROOTS=json.dumps(roots), TF_PIPELINE_NAMES=json.dumps(dict(zip(roots, ("first", "second")))),
