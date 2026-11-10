@@ -99,6 +99,14 @@ jobs:
           persist-credentials: false
       - name: Validate private plan configuration
         run: python3 .github/scripts/terraform_apply.py check-plan-config
+      - name: Diagnose OIDC subject (no token output)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('sts.amazonaws.com');
+            core.setSecret(token);
+            const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+            core.info(JSON.stringify({sub: claims.sub, aud: claims.aud}));
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
