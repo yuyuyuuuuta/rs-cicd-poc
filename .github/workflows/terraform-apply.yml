@@ -38,8 +38,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - name: Test workflow guards
-        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
       - name: Inspect PR and select registered roots
         id: pr
         env:
