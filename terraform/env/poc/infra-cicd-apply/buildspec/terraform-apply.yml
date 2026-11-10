@@ -23,30 +23,6 @@ phases:
     commands:
       - |
         set -euo pipefail
-        if [[ ! "${EXPECTED_COMMIT_SHA:-}" =~ ^[0-9a-f]{40}$ || "${SOURCE_COMMIT_SHA:-}" != "$EXPECTED_COMMIT_SHA" ]]; then
-          echo "Requested PR commit is missing or does not match the source commit."
-          exit 1
-        fi
-        if [[ ! "$TARGET_STATE_DIR" =~ ^terraform/env/poc/[A-Za-z0-9_-]+$ || "$TARGET_STATE_DIR" == terraform/env/poc/infra-cicd-* ]]; then
-          echo "Invalid target root: $TARGET_STATE_DIR"
-          exit 1
-        fi
-        source_dir=$(realpath "$CODEBUILD_SRC_DIR")
-        target_dir=$(realpath "${source_dir}/${TARGET_STATE_DIR}")
-        if [[ "$target_dir" != "${source_dir}/${TARGET_STATE_DIR}" || ! -d "$target_dir" ]]; then
-          echo "Target root is missing or resolves outside its assigned path."
-          exit 1
-        fi
-
-        echo "Source commit: $SOURCE_COMMIT_SHA"
-        echo "=== TERRAFORM_APPLY_BEGIN:${TARGET_STATE_DIR} ==="
-        trap 'status=$?; printf "=== TERRAFORM_APPLY_END:%s ===\n" "$TARGET_STATE_DIR"; printf "Terraform apply exit code: %s\n" "$status"' EXIT
-
-        terraform -chdir="$target_dir" init -input=false -lockfile=readonly \
-          -backend-config="bucket=${STATE_BUCKET}" \
-          -backend-config="key=${STATE_KEY}" \
-          -backend-config="region=${AWS_DEFAULT_REGION}" \
-          -backend-config="encrypt=true" \
-          -backend-config="use_lockfile=true"
-        terraform -chdir="$target_dir" validate -no-color
-        terraform -chdir="$target_dir" apply -auto-approve -input=false -no-color -lock-timeout=5m
+        python3 - <<'PY'
+        __TRUSTED_RUNNER__
+        PY

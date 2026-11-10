@@ -35,9 +35,12 @@ resource "aws_iam_role_policy" "pipeline" {
         Resource = "${aws_s3_bucket.artifacts.arn}/*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["codebuild:StartBuild", "codebuild:BatchGetBuilds"]
-        Resource = aws_codebuild_project.apply[each.key].arn
+        Effect = "Allow"
+        Action = ["codebuild:StartBuild", "codebuild:BatchGetBuilds"]
+        Resource = [
+          aws_codebuild_project.apply[each.key].arn,
+          "arn:aws:codebuild:${var.aws_region}:${var.aws_account_id}:project/${lookup(var.plan_project_names, each.key, "${local.name_prefix}-${each.key}-plan")}"
+        ]
       }
     ]
   })
@@ -72,7 +75,20 @@ resource "aws_iam_role_policy" "build" {
       {
         Effect   = "Allow"
         Action   = ["s3:GetBucketLocation", "s3:GetBucketVersioning", "s3:GetBucketAcl", "s3:ListBucket"]
-        Resource = [aws_s3_bucket.artifacts.arn, "arn:aws:s3:::${local.state_bucket}"]
+        Resource = aws_s3_bucket.artifacts.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetBucketLocation", "s3:GetBucketVersioning"]
+        Resource = "arn:aws:s3:::${local.state_bucket}"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = "arn:aws:s3:::${local.state_bucket}"
+        Condition = {
+          StringLike = { "s3:prefix" = [each.value.root_dir, "${each.value.root_dir}/*"] }
+        }
       },
       {
         Effect   = "Allow"
@@ -81,10 +97,32 @@ resource "aws_iam_role_policy" "build" {
       },
       {
         Effect = "Allow"
-        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Action = ["s3:GetObject", "s3:PutObject"]
         Resource = [
           "arn:aws:s3:::${local.state_bucket}/${each.value.root_dir}/terraform.tfstate",
           "arn:aws:s3:::${local.state_bucket}/${each.value.root_dir}/terraform.tfstate.tflock"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:DeleteObject"]
+        Resource = "arn:aws:s3:::${local.state_bucket}/${each.value.root_dir}/terraform.tfstate.tflock"
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = [
+          "arn:aws:s3:::${var.plan_artifact_bucket_name}/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*",
+          "arn:aws:s3:::${var.plan_artifact_bucket_name}/approvals/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = [
+          "arn:aws:s3:::${var.plan_artifact_bucket_name}/consumed/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*",
+          "arn:aws:s3:::${var.plan_artifact_bucket_name}/consumed/by-head/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}.json",
+          "arn:aws:s3:::${var.plan_artifact_bucket_name}/diagnostics/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*"
         ]
       },
       {
@@ -141,6 +179,16 @@ resource "aws_iam_role_policy" "github_actions" {
         Effect   = "Allow"
         Action   = ["logs:GetLogEvents"]
         Resource = [for group in aws_cloudwatch_log_group.apply : "${group.arn}:log-stream:*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = "arn:aws:s3:::${var.plan_artifact_bucket_name}/plans/*/manifest.json"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.plan_artifact_bucket_name}/approvals/*"
       }
     ]
   })

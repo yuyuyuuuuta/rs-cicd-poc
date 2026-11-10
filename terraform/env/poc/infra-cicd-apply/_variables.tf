@@ -43,3 +43,12 @@ variable "artifact_bucket_name" {
 variable "test_bucket_name" {
   type = string
 }
+
+variable "plan_artifact_bucket_name" {
+  type = string
+}
+
+variable "plan_project_names" {
+  type    = map(string)
+  default = {}
+}

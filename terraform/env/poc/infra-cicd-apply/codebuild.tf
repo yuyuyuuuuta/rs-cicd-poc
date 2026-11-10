@@ -28,6 +28,18 @@ resource "aws_codebuild_project" "apply" {
       value = "1.16.6"
     }
     environment_variable {
+      name  = "BUILD_MODE"
+      value = "apply"
+    }
+    environment_variable {
+      name  = "PLAN_BUCKET"
+      value = var.plan_artifact_bucket_name
+    }
+    environment_variable {
+      name  = "GITHUB_REPOSITORY_NAME"
+      value = var.github_repository
+    }
+    environment_variable {
       name  = "TARGET_STATE_DIR"
       value = each.value.root_dir
     }
@@ -59,7 +71,7 @@ resource "aws_codebuild_project" "apply" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = file("${path.module}/buildspec/terraform-apply.yml")
+    buildspec = replace(file("${path.module}/buildspec/terraform-apply.yml"), "__TRUSTED_RUNNER__", indent(8, file("${path.module}/buildspec/terraform_runner.py")))
   }
 
   logs_config {

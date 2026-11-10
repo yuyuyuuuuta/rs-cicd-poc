@@ -2,6 +2,12 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "ManageStateAndPlanProtection",
+      "Effect": "Allow",
+      "Action": ["s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutLifecycleConfiguration"],
+      "Resource": ["arn:aws:s3:::<TF_STATE_BUCKET>", "arn:aws:s3:::<PLAN_ARTIFACT_BUCKET>"]
+    },
+    {
       "Sid": "ManagePocBuckets",
       "Effect": "Allow",
       "Action": [

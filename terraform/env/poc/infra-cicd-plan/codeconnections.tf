@@ -28,6 +28,18 @@ resource "aws_codebuild_project" "plan" {
       value = "1.16.6"
     }
     environment_variable {
+      name  = "BUILD_MODE"
+      value = "plan"
+    }
+    environment_variable {
+      name  = "PLAN_BUCKET"
+      value = aws_s3_bucket.artifacts.bucket
+    }
+    environment_variable {
+      name  = "GITHUB_REPOSITORY_NAME"
+      value = var.github_repository
+    }
+    environment_variable {
       name  = "TARGET_STATE_DIR"
       value = each.value.root_dir
     }
@@ -59,7 +71,7 @@ resource "aws_codebuild_project" "plan" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = file("${path.module}/buildspec/terraform-plan.yml")
+    buildspec = replace(file("${path.module}/buildspec/terraform-plan.yml"), "__TRUSTED_RUNNER__", indent(8, file("${path.module}/../infra-cicd-apply/buildspec/terraform_runner.py")))
   }
 
   logs_config {

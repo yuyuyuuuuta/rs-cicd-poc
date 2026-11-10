@@ -1,10 +1,14 @@
 resource "aws_codepipeline" "plan" {
-  for_each       = local.targets
+  for_each       = {}
   name           = "${local.name_prefix}-${each.key}-plan"
   role_arn       = aws_iam_role.pipeline[each.key].arn
   pipeline_type  = "V2"
   execution_mode = "SUPERSEDED"
   tags           = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 
   artifact_store {
     location = aws_s3_bucket.artifacts.bucket

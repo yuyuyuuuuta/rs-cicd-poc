@@ -1,5 +1,9 @@
 output "pipeline_names" {
-  value = { for target, pipeline in aws_codepipeline.plan : target => pipeline.name }
+  value = { for target in keys(local.targets) : target => lookup(var.shared_pipeline_names, target, "${local.name_prefix}-${target}-apply") }
+}
+
+output "project_names" {
+  value = { for target, project in aws_codebuild_project.plan : target => project.name }
 }
 
 output "github_plan_role_arn" {

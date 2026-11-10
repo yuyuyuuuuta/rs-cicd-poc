@@ -1,18 +1,20 @@
 # rs-cicd-poc
 
-GitHub Actions と AWS CodePipeline を組み合わせた Terraform apply の PoC です。
+GitHub Actions と AWS CodePipeline/CodeBuild を組み合わせた Terraform CI/CD の PoC です。
 
-現在は State 保存基盤と `ci-test` 専用 apply 基盤の AWS 構築が完了し、Connection は AVAILABLE です。PR 自動 plan と branch 指定の手動 apply workflow を実装しています。plan 基盤は Terraform code/validate と 13 resource create plan まで検証済みですが、AWS apply、追加 Secret 登録、workflow 実行は未実施です。
+2026-11-10: State 保護、保存 Plan 基盤、既存 Pipeline の Plan/Apply 共通化を AWS に反映しました。承認済みの旧 Plan 専用 Pipeline 1本は廃止済みで、各基盤の反映後 Plan は差分なしです。GitHub 設定確認・今回のコードの main 反映・実 PR による一連の動作検証は残っています。
 
 構成と現在の手順は [terraform/README.md](terraform/README.md) を参照してください。
 
-## 手動 Apply
+## PR Plan と承認付き Apply
 
-plan 実行用の OIDC role/pipeline/artifact Secrets を登録し、plan 基盤を管理者が手動構築します。apply 側は Environment `terraform-apply` の Required reviewers と deployment branch `main` 制限を設定してください。初回配置や基盤変更の PR は apply workflow の対象にしません。
+Plan 用 OIDC role/CodeBuild/artifact 基盤を用意し、既存 Apply Pipeline を Root ごとに一つの共通 Pipeline として更新します。Plan/Apply の実行ロールは分離します。Environment `terraform-apply` に Required reviewers、自己承認防止、deployment branch `main` 制限、管理者バイパス禁止を設定してください。初回配置や基盤変更の PR は通常の CI/CD 対象にしません。
 
-push 後に PR を作成すると自動 plan が動きます。完了後、Actions の `Terraform apply PR (manual)` → Run workflow → Branch `main` から PR の source branch を指定します。静的解析後に Environment 承認を待ち、承認後に専用 Pipeline を起動します。Actions がログを Summary に整形し、成功と HEAD/base の不変を確認して自動マージします。
+PR 作成・更新時に自動 Plan が動きます。成功後に write 以上の権限を持つ担当者が PR へ `apply-request` を付けると、静的解析と最新 Plan の再作成を実行します。Summary の差分を確認して Environment 承認すると、その保存 Plan だけを AWS 側で適用します。全 Root の成功と HEAD/base、GitHub 保護条件を確認して自動マージします。PR 番号・ブランチ名の手入力は不要です。
 
-fork PR、基盤や workflow を変更する PR、失敗・タイムアウト時は apply/merge を止めます。AWS に加えた変更は自動ロールバックされません。apply は head/base に結び付いた成功 plan status を要求します。詳細は plan/apply 各 README を参照してください。
+fork PR、基盤や workflow を変更する PR、失敗・タイムアウト時は Apply/Merge を止めます。PR 更新・ラベル解除・PR 終了は古い Workflow をキャンセルしますが、実行中の AWS 操作は取り消しません。AWS 側でも適用直前に PR と Workflow を再確認します。現在は公開 GitHub リポジトリの読み取り API を使用するため、非公開リポジトリでは fail closed になります。
+
+Plan の有効期間は 24 時間です。期限切れ・古い State は再 Plan と再承認が必要です。同じ PR/SHA/Root の適用許可は一度だけ消費でき、失敗・部分適用後は管理者が State と S3 消費記録を確認します。詳細は plan/apply 各 README を参照してください。
 
 ## 識別情報の管理
 

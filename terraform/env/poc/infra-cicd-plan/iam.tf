@@ -32,7 +32,12 @@ resource "aws_iam_role_policy" "pipeline" {
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]
-        Resource = "${aws_s3_bucket.artifacts.arn}/*"
+        Resource = ["${aws_s3_bucket.artifacts.arn}/plans/*", "${aws_s3_bucket.artifacts.arn}/diagnostics/*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = "arn:aws:s3:::${var.source_artifact_bucket_name}/*"
       },
       {
         Effect   = "Allow"
@@ -85,9 +90,17 @@ resource "aws_iam_role_policy" "build" {
         }
       },
       {
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]
+        Resource = [
+          "${aws_s3_bucket.artifacts.arn}/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*",
+          "${aws_s3_bucket.artifacts.arn}/diagnostics/plans/${var.github_repository}/pr-*/*/${substr(sha256(each.value.root_dir), 0, 16)}/*"
+        ]
+      },
+      {
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]
-        Resource = "${aws_s3_bucket.artifacts.arn}/*"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = "arn:aws:s3:::${var.source_artifact_bucket_name}/*"
       },
       {
         Effect   = "Allow"
@@ -141,7 +154,7 @@ resource "aws_iam_role_policy" "github_plan" {
       {
         Effect   = "Allow"
         Action   = ["codepipeline:StartPipelineExecution", "codepipeline:GetPipelineExecution", "codepipeline:ListActionExecutions"]
-        Resource = [for pipeline in aws_codepipeline.plan : pipeline.arn]
+        Resource = [for target in keys(local.targets) : "arn:aws:codepipeline:${var.aws_region}:${var.aws_account_id}:${lookup(var.shared_pipeline_names, target, "${local.name_prefix}-${target}-apply")}"]
       },
       {
         Effect   = "Allow"
@@ -152,6 +165,11 @@ resource "aws_iam_role_policy" "github_plan" {
         Effect   = "Allow"
         Action   = ["logs:GetLogEvents"]
         Resource = [for group in aws_cloudwatch_log_group.plan : "${group.arn}:log-stream:*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectVersion"]
+        Resource = "${aws_s3_bucket.artifacts.arn}/plans/*/manifest.json"
       }
     ]
   })

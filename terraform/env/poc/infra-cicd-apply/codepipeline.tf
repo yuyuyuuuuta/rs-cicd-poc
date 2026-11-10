@@ -17,6 +17,14 @@ resource "aws_codepipeline" "apply" {
     description   = "Expected PR head SHA; apply is rejected if empty or mismatched"
   }
 
+  dynamic "variable" {
+    for_each = toset(["ExecutionMode", "PrNumber", "BaseCommitSha", "PlanRunId", "PlanAttempt", "ManifestVersion"])
+    content {
+      name          = variable.value
+      default_value = "UNSET"
+    }
+  }
+
   stage {
     name = "Source"
 
@@ -39,23 +47,53 @@ resource "aws_codepipeline" "apply" {
     }
   }
 
-  stage {
-    name = "Apply"
+  dynamic "stage" {
+    for_each = ["plan", "apply"]
+    content {
+      name = title(stage.value)
 
-    action {
-      name            = "TerraformApply"
-      category        = "Build"
-      owner           = "AWS"
-      provider        = "CodeBuild"
-      version         = "1"
-      input_artifacts = ["SourceOutput"]
+      before_entry {
+        condition {
+          result = "SKIP"
+          rule {
+            name = "ExecutionMode"
+            rule_type_id {
+              category = "Rule"
+              owner    = "AWS"
+              provider = "VariableCheck"
+              version  = "1"
+            }
+            configuration = {
+              Variable = "#{variables.ExecutionMode}"
+              Value    = stage.value
+              Operator = "EQ"
+            }
+          }
+        }
+      }
 
-      configuration = {
-        ProjectName = aws_codebuild_project.apply[each.key].name
-        EnvironmentVariables = jsonencode([
-          { name = "EXPECTED_COMMIT_SHA", value = "#{variables.PrCommitSha}", type = "PLAINTEXT" },
-          { name = "SOURCE_COMMIT_SHA", value = "#{SourceVariables.CommitId}", type = "PLAINTEXT" }
-        ])
+      action {
+        name            = "Terraform${title(stage.value)}"
+        category        = "Build"
+        owner           = "AWS"
+        provider        = "CodeBuild"
+        version         = "1"
+        input_artifacts = ["SourceOutput"]
+
+        configuration = {
+          ProjectName = stage.value == "apply" ? aws_codebuild_project.apply[each.key].name : lookup(var.plan_project_names, each.key, "${local.name_prefix}-${each.key}-plan")
+          EnvironmentVariables = jsonencode([
+            { name = "EXPECTED_COMMIT_SHA", value = "#{variables.PrCommitSha}", type = "PLAINTEXT" },
+            { name = "SOURCE_COMMIT_SHA", value = "#{SourceVariables.CommitId}", type = "PLAINTEXT" },
+            { name = "EXECUTION_MODE", value = "#{variables.ExecutionMode}", type = "PLAINTEXT" },
+            { name = "PR_NUMBER", value = "#{variables.PrNumber}", type = "PLAINTEXT" },
+            { name = "BASE_COMMIT_SHA", value = "#{variables.BaseCommitSha}", type = "PLAINTEXT" },
+            { name = "PLAN_RUN_ID", value = "#{variables.PlanRunId}", type = "PLAINTEXT" },
+            { name = "PLAN_ATTEMPT", value = "#{variables.PlanAttempt}", type = "PLAINTEXT" },
+            { name = "MANIFEST_VERSION", value = "#{variables.ManifestVersion}", type = "PLAINTEXT" },
+            { name = "PIPELINE_EXECUTION_ID", value = "#{codepipeline.PipelineExecutionId}", type = "PLAINTEXT" }
+          ])
+        }
       }
     }
   }

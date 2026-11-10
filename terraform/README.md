@@ -7,8 +7,8 @@ terraform/
 └── env/
     └── poc/
         ├── ci-test/        # CI/CD の plan/apply 対象
-        ├── infra-cicd-plan/   # ci-test 専用 plan 基盤
-        └── infra-cicd-apply/  # ci-test 専用 apply 基盤
+        ├── infra-cicd-plan/   # Plan 用 CodeBuild/OIDC と保存 Plan S3
+        └── infra-cicd-apply/  # Root ごとの共通 Pipeline と Apply CodeBuild
 ```
 
 `ci-test` と各 CI/CD 基盤は独立した Terraform root とし、State を分離します。対象 root ごとに専用 Pipeline を用意します。基盤自身は CI/CD 対象にせず、管理者が手動で構築・変更します。
@@ -17,12 +17,12 @@ terraform/
 
 ## 現在の実装
 
-| root                       | 実装内容                                                    | State                                                     |
-| -------------------------- | ----------------------------------------------------------- | --------------------------------------------------------- |
-| `bootstrap/state-bucket`   | S3、バージョニング、暗号化、公開ブロック、所有権設定        | ローカル `terraform.tfstate`                              |
-| `env/poc/ci-test`          | テスト用 S3、暗号化、公開ブロック、同バケットの data source | S3 `terraform/env/poc/ci-test/terraform.tfstate`          |
-| `env/poc/infra-cicd-plan`  | CodeConnections、plan Pipeline/CodeBuild、read-only role    | S3 `terraform/env/poc/infra-cicd-plan/terraform.tfstate`  |
-| `env/poc/infra-cicd-apply` | apply 基盤（14/14 作成済み、Connection AVAILABLE）          | S3 `terraform/env/poc/infra-cicd-apply/terraform.tfstate` |
+| root                       | 実装内容                                                                 | State                                                     |
+| -------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `bootstrap/state-bucket`   | S3、バージョニング、暗号化、公開ブロック、所有権設定                     | ローカル `terraform.tfstate`                              |
+| `env/poc/ci-test`          | テスト用 S3、暗号化、公開ブロック、同バケットの data source              | S3 `terraform/env/poc/ci-test/terraform.tfstate`          |
+| `env/poc/infra-cicd-plan`  | Plan CodeBuild、read-only role、保存 Plan S3。更新・旧 Pipeline 廃止済み | S3 `terraform/env/poc/infra-cicd-plan/terraform.tfstate`  |
+| `env/poc/infra-cicd-apply` | 既存 Pipeline を Plan/Apply 兼用化。AWS 反映・差分なし確認済み           | S3 `terraform/env/poc/infra-cicd-apply/terraform.tfstate` |
 
 各 root の `_terraform.tf` は CLI・provider の制約、`_providers.tf` は接続先、`_backend.tf` は公開可能な State キー、`_variables.tf` は入力変数を定義します。実際のアカウント・リージョン・バケット名は、Git 管理外の `terraform.tfvars` と `backend.hcl` に置きます。ファイル名の `_` は読み込み順を制御しません。
 
@@ -68,8 +68,8 @@ terraform -chdir=terraform/env/poc/ci-test init -backend-config=backend.hcl -inp
 terraform -chdir=terraform/env/poc/ci-test plan
 ```
 
-`ci-test` の手動 apply はここでは行いません。実装済みの手動 GitHub Actions と apply Pipeline の検証対象です。State バケットには `prevent_destroy`、テスト用バケットには `force_destroy = false` を設定しています。
+`ci-test` の手動 apply はここでは行いません。ラベル起動の GitHub Actions と共通 Pipeline の検証対象です。State バケットには `prevent_destroy`、テスト用バケットには `force_destroy = false` を設定しています。
 
 旧 Connection は削除済みで、新しい Connection は GitHub 接続承認済みです。AWS API で AVAILABLE を確認しました。
 
-apply 基盤は 14/14 リソース構築済みで、Connection は AVAILABLE です。PR 自動 plan と branch 指定 apply workflow を実装しています。plan 基盤 Terraform は validate と 13 resource create plan まで検証済みですが、AWS apply と新 workflow 実行は未実施です。手順は [plan 基盤 README](env/poc/infra-cicd-plan/README.md) と [apply 基盤 README](env/poc/infra-cicd-apply/README.md) を参照してください。
+2026-11-10 に共通 Pipeline・保存 Plan・S3 保護設定を AWS へ反映し、承認済みの旧 Plan Pipeline 1本を廃止しました。既存資源の再作成はなく、各基盤の反映後 Plan は差分なしです。次は GitHub 設定確認、コードの main 反映、検証 PR による一連の動作確認です。手順は [plan 基盤 README](env/poc/infra-cicd-plan/README.md) と [apply 基盤 README](env/poc/infra-cicd-apply/README.md) を参照してください。

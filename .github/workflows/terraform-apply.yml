@@ -1,33 +1,32 @@
-name: Terraform apply PR (manual)
-run-name: "Terraform apply ${{ inputs.pr_branch }}"
+name: Terraform apply PR (label)
+run-name: "Terraform apply PR #${{ github.event.pull_request.number }}"
 
 on:
-  workflow_dispatch:
-    inputs:
-      pr_branch:
-        description: Source branch of the open PR with a successful automatic plan
-        required: true
-        type: string
+  pull_request_target:
+    types: [labeled, synchronize, unlabeled, closed]
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-apply-${{ github.repository }}
-  cancel-in-progress: false
+  group: terraform-apply-${{ github.repository }}-${{ github.event.pull_request.number }}-${{ github.event.label.name == 'apply-request' || github.event.action == 'synchronize' || github.event.action == 'closed' }}
+  cancel-in-progress: true
 
 env:
   TF_IN_AUTOMATION: "true"
   AWS_PAGER: ""
-  PR_BRANCH: ${{ inputs.pr_branch }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
 
 jobs:
   inspect:
+    if: github.event.action == 'labeled' && github.event.label.name == 'apply-request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
       pr_number: ${{ steps.pr.outputs.pr_number }}
       pr_branch: ${{ steps.pr.outputs.pr_branch }}
@@ -37,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Test workflow guards
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
@@ -56,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
@@ -73,15 +72,70 @@ jobs:
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
         run: python3 .github/scripts/terraform_apply.py validate
 
-  aws-apply:
+  aws-replan:
     needs: [inspect, static-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      id-token: write
+    outputs:
+      plans: ${{ steps.plan.outputs.plans }}
+    env:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_GITHUB_PLAN_ROLE_ARN: ${{ secrets.AWS_GITHUB_PLAN_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+      TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
+      TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
+      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Validate private plan configuration
+        run: python3 .github/scripts/terraform_apply.py check-plan-config
+      - name: Configure read-only plan credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_PLAN_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+          role-session-name: gha-terraform-replan
+          role-duration-seconds: 3600
+      - name: Verify AWS account
+        shell: bash
+        run: |
+          set -euo pipefail
+          account=$(aws sts get-caller-identity --query Account --output text)
+          [[ "$account" == "$AWS_ACCOUNT_ID" ]]
+      - name: Save and summarize the exact plan before approval
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
+          EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+          REQUIRE_PR_PLAN: "true"
+        run: python3 .github/scripts/terraform_apply.py plan
+
+  aws-apply:
+    needs: [inspect, aws-replan]
     if: github.ref == 'refs/heads/main'
     environment: terraform-apply
+    concurrency:
+      group: terraform-apply-aws-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
       contents: read
       pull-requests: read
+      actions: read
       id-token: write
     outputs:
       applied_head: ${{ steps.apply.outputs.applied_head }}
@@ -92,13 +146,14 @@ jobs:
       AWS_GITHUB_ACTIONS_ROLE_ARN: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
+      TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
       TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
       PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
       PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Validate private configuration
         run: python3 .github/scripts/terraform_apply.py check-config
@@ -125,6 +180,7 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+          SAVED_PLANS: ${{ needs.aws-replan.outputs.plans }}
         run: python3 .github/scripts/terraform_apply.py apply
 
   merge:
@@ -134,10 +190,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Merge only the successfully applied PR head
         env:

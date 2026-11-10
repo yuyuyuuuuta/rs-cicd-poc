@@ -91,7 +91,7 @@ jobs:
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
       TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
-      TF_PLAN_PIPELINE_NAMES: ${{ secrets.TF_PLAN_PIPELINE_NAMES }}
+      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
     steps:
       - uses: actions/checkout@v4
         with:
