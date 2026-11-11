@@ -569,7 +569,6 @@ def execute_pipelines(phase):
         raise ValueError("Saved plans do not cover exactly the selected roots.")
     if phase == "apply" or os.environ.get("REQUIRE_PR_PLAN") == "true":
         require_successful_plan(github, head, base)
-    failures = []
     results = {}
     for root in roots:
         current, _, _ = snapshot(github, number, head, base)
@@ -619,9 +618,7 @@ def execute_pipelines(phase):
                 if failure is None:
                     failure = error
         if failure is not None:
-            failures.append(f"{root}: {failure}")
-    if failures:
-        raise ValueError("One or more modules failed: " + "; ".join(failures))
+            raise ValueError(f"Terraform {phase} failed for {root}: {failure}") from failure
     snapshot(github, number, head, base)
     if phase == "apply":
         output("applied_head", head)
@@ -714,10 +711,10 @@ def check_config():
         raise ValueError("The OIDC role ARN does not match the configured account.")
     if not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", os.environ["AWS_REGION"]):
         raise ValueError("Invalid AWS_REGION Secret.")
-    for name in ("TF_STATE_BUCKET", "TF_TEST_BUCKET"):
+    for name in ("TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET"):
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", os.environ[name]):
             raise ValueError("Invalid bucket name Secret.")
-    pipeline_names(discover_targets())
+    pipeline_names(target_roots())
 
 
 def check_plan_config():
