@@ -1,5 +1,5 @@
 output "pipeline_names" {
-  value = { for target, pipeline in aws_codepipeline.apply : target => pipeline.name }
+  value = { for target, pipeline in aws_codepipeline.apply : local.targets[target].root_dir => pipeline.name }
 }
 
 output "github_actions_role_arn" {

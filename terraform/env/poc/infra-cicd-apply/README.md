@@ -1,12 +1,12 @@
 # Terraform apply 基盤
 
-Root ごとの共通 CodePipeline、Apply 用 CodeBuild/IAM/OIDC、CodeConnections、ソース成果物 S3 を管理します。対象 Root は `terraform/env/poc/ci-test` です。Plan 用 CodeBuild と保存 Plan S3 は [Plan 基盤](../infra-cicd-plan/README.md) が管理します。
+検出された各Rootの共通CodePipeline、Apply用CodeBuild/IAM/OIDC、CodeConnections、ソース成果物S3を管理します。Plan用CodeBuildと保存Plan S3は[Plan基盤](../infra-cicd-plan/README.md)が管理します。
 
 ## Pipeline
 
 | 項目           | 仕様                                                                          |
 | -------------- | ----------------------------------------------------------------------------- |
-| 本数・実行方式 | 対象 Root ごとに1本。V2 / `QUEUED`                                            |
+| 本数・実行方式 | 検出Rootごとに1本。V2 / `QUEUED`                                              |
 | ステージ       | Source → Plan → Apply                                                         |
 | モード         | `ExecutionMode=plan                                                           | apply` を `VariableCheck` で照合し、対象外ステージは `SKIP` |
 | Source         | CodeConnections、`COMMIT_ID` override による PR head SHA 固定                 |
@@ -15,7 +15,7 @@ Root ごとの共通 CodePipeline、Apply 用 CodeBuild/IAM/OIDC、CodeConnectio
 | buildspec      | Terraform 管理のインライン設定。PR 内の buildspec には依存しない              |
 | ログ           | CloudWatch Logs、保持期間14日。生診断は非公開 S3                              |
 
-Pipeline 変数は `ExecutionMode`、`PrCommitSha`、`PrNumber`、`BaseCommitSha`、`PlanRunId`、`PlanAttempt`、`ManifestVersion` です。CodeBuild が Source の commit SHA と要求 SHA を照合します。Root と State キーはプロジェクトごとに固定です。
+Pipeline名は`<TF_PIPELINE_NAME_PREFIX>-<root basename>-apply`で生成します。Pipeline変数は`ExecutionMode`、`PrCommitSha`、`PrNumber`、`BaseCommitSha`、`PlanRunId`、`PlanAttempt`、`ManifestVersion`です。CodeBuildがSourceのcommit SHAと要求SHAを照合します。RootとState keyはプロジェクトごとに固定です。
 
 ## Workflow と承認
 
@@ -26,7 +26,7 @@ Pipeline 変数は `ExecutionMode`、`PrCommitSha`、`PrNumber`、`BaseCommitSha
 
 Apply のジョブ依存関係は `inspect` → `static-checks` → `aws-replan` → `aws-apply` → `merge` です。Environment `terraform-apply` の Required reviewers は `aws-apply` だけに適用し、許可ブランチは `main` です。承認前の Plan は Summary に表示され、承認後に再作成されません。却下時は Apply/Merge しません。
 
-共通制御は [.github/scripts/terraform_apply.py](../../../../.github/scripts/terraform_apply.py) です。`TARGETS` / `DEPENDENCIES` が Root と共通モジュールの依存関係を管理します。Actions は信頼済み base SHA の制御コードを使い、静的解析ジョブには AWS Secrets を渡しません。fork、未登録パス、CI/CD 基盤の変更は自動適用対象外です。
+GitHub Actionsの制御は[terraform_apply.sh](../../../../.github/scripts/terraform_apply.sh)と[terraform_plan.sh](../../../../.github/scripts/terraform_plan.sh)が担当し、Python版はworkflow内のコメントから切り替えられます。Rootは`terraform/env/poc/`直下の`.tf`を持つディレクトリから自動検出し、`infra-cicd-*`は除外します。共有module変更時は全対象Rootを選びます。`TF_PIPELINE_NAME_PREFIX`はGitHub repository variableとしてTerraformの`name_prefix`と一致させます。Actionsは信頼済みbase SHAの制御コードを使い、静的解析jobにはAWS Secretsを渡しません。forkとCI/CD基盤の変更は自動適用対象外です。
 
 ## 認証と設定
 
@@ -37,17 +37,16 @@ Apply のジョブ依存関係は `inspect` → `static-checks` → `aws-replan`
 | Plan 用  | `repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:pull_request`                |
 | Apply 用 | `repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:environment:terraform-apply` |
 
-| GitHub Secret                   | 用途                                       |
-| ------------------------------- | ------------------------------------------ |
-| `AWS_GITHUB_ACTIONS_ROLE_ARN`   | 承認後の Apply 用 OIDC ロール              |
-| `AWS_GITHUB_PLAN_ROLE_ARN`      | PR Plan・承認前再 Plan 用 OIDC ロール      |
-| `AWS_ACCOUNT_ID` / `AWS_REGION` | AWS 接続先                                 |
-| `TF_STATE_BUCKET`               | State 保存先                               |
-| `TF_TEST_BUCKET`                | 対象 S3                                    |
-| `TF_PIPELINE_NAMES`             | Root パスから共通 Pipeline 名への JSON map |
-| `TF_PLAN_ARTIFACT_BUCKET`       | 保存 Plan とメタデータの保存先             |
+| GitHub Secret                   | 用途                                  |
+| ------------------------------- | ------------------------------------- |
+| `AWS_GITHUB_ACTIONS_ROLE_ARN`   | 承認後の Apply 用 OIDC ロール         |
+| `AWS_GITHUB_PLAN_ROLE_ARN`      | PR Plan・承認前再 Plan 用 OIDC ロール |
+| `AWS_ACCOUNT_ID` / `AWS_REGION` | AWS 接続先                            |
+| `TF_STATE_BUCKET`               | State 保存先                          |
+| `TF_TEST_BUCKET`                | 対象 S3                               |
+| `TF_PLAN_ARTIFACT_BUCKET`       | 保存 Plan とメタデータの保存先        |
 
-設定例は [admin/github-secrets.local.json.example](../../../../admin/github-secrets.local.json.example) です。`plan_artifact_bucket_name` は Plan S3、`plan_project_names` は Plan 用 CodeBuild 名の対応表です。省略したプロジェクト名は共通 `name_prefix` から算出します。
+`TF_PIPELINE_NAME_PREFIX`はSecretではなくGitHub repository variableです。AWS Secretの設定例は[admin/github-secrets.local.json.example](../../../../admin/github-secrets.local.json.example)にあります。Plan CodeBuild名とPipeline名は共通`name_prefix`から自動生成します。
 
 構築用 IAM と Pipeline/CodeBuild/Actions の実行用 IAM は分離しています。構築用の権限範囲は [admin/iam/terraform-cicd-policy.json.example](../../../../admin/iam/terraform-cicd-policy.json.example) に定義しています。
 

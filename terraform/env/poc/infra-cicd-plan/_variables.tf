@@ -44,15 +44,15 @@ variable "test_bucket_name" {
   type = string
 }
 
+variable "target_bucket_names" {
+  type    = map(string)
+  default = {}
+}
+
 variable "codeconnections_arn" {
   type = string
 }
 
 variable "source_artifact_bucket_name" {
   type = string
-}
-
-variable "shared_pipeline_names" {
-  type    = map(string)
-  default = {}
 }

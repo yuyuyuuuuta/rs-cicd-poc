@@ -44,11 +44,11 @@ variable "test_bucket_name" {
   type = string
 }
 
-variable "plan_artifact_bucket_name" {
-  type = string
-}
-
-variable "plan_project_names" {
+variable "target_bucket_names" {
   type    = map(string)
   default = {}
+}
+
+variable "plan_artifact_bucket_name" {
+  type = string
 }

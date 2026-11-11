@@ -7,14 +7,14 @@ GitHub Actions と AWS CodePipeline/CodeBuild を組み合わせた Terraform CI
 | コンポーネント                | 役割                                                                |
 | ----------------------------- | ------------------------------------------------------------------- |
 | GitHub Actions                | 静的解析、変更 Root 検出、Pipeline 起動、承認、結果表示、自動マージ |
-| CodePipeline                  | Root ごとに1本。Plan/Apply モードで別々に実行                       |
+| CodePipeline                  | 検出 Root ごとに1本。Plan/Apply モードで別々に実行                  |
 | CodeBuild                     | Plan 用と Apply 用で実行ロールを分離して Terraform を実行           |
 | S3                            | Terraform State、ソース成果物、保存 Plan、承認・消費記録            |
 | GitHub OIDC / CodeConnections | Actions の AWS 認証 / 指定コミットのソース取得                      |
 
-PR 作成・更新で自動 Plan が起動します。`apply-request` ラベルによる Apply Workflow は、再 Plan と Summary 表示の後、Environment `terraform-apply` の承認を経て保存 Plan を適用します。全対象の成功と PR の SHA・GitHub 保護条件を満たす場合だけ自動マージします。
+PR 作成・更新時の `pull_request` event で自動 Plan が起動します。`apply-request` ラベルによるApply Workflowは`pull_request_target`で起動し、再PlanとSummary表示の後、Environment `terraform-apply`の承認を経て保存Planを適用します。全対象の成功とPRのSHA・GitHub保護条件を満たす場合だけ自動マージします。
 
-対象 Root は `ci-test` です。CI/CD 基盤自身は自動適用の対象外です。構成の詳細は [terraform/README.md](terraform/README.md) に記載しています。
+対象Rootは`terraform/env/poc/`直下に`.tf`ファイルを持つディレクトリから自動検出します。`infra-cicd-*`は対象外です。共有module、`terraform/modules/`、`buildspec/`の変更では全対象RootをPlanします。Pipeline名はGitHub Actionsのrepository variable `TF_PIPELINE_NAME_PREFIX`とRootのbasenameから自動生成し、Rootごとの名前mapは使いません。構成の詳細は[terraform/README.md](terraform/README.md)に記載しています。
 
 ## 識別情報の管理
 

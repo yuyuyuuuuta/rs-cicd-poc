@@ -1,6 +1,6 @@
 # Terraform plan 基盤
 
-`ci-test` の Plan 用 CodeBuild、IAM/OIDC ロール、保存 Plan 用 S3 を管理する Root です。State と実行ロールは Apply 基盤から分離し、Pipeline は [Apply 基盤](../infra-cicd-apply/README.md) の共通 Pipeline を使用します。
+検出されたRootのPlan用CodeBuild、IAM/OIDCロール、保存Plan用S3を管理します。Stateと実行ロールはApply基盤から分離し、Pipelineは[Apply基盤](../infra-cicd-apply/README.md)の共通Pipelineを使用します。
 
 ## 構成
 
@@ -12,15 +12,15 @@
 
 ## 認証と入力
 
-Plan 用 OIDC subject は `repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:pull_request`、audience は `sts.amazonaws.com` です。`pull_request_target` が使用する base branch の ref と OIDC subject は同一ではありません。
+Plan Workflowは`pull_request` eventで起動し、OIDC subjectは`repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:pull_request`、audienceは`sts.amazonaws.com`です。
 
-| 設定                          | 用途                                                                 |
-| ----------------------------- | -------------------------------------------------------------------- |
-| `AWS_GITHUB_PLAN_ROLE_ARN`    | Actions が使用する Plan 用 OIDC ロール                               |
-| `TF_PLAN_ARTIFACT_BUCKET`     | 保存 Plan とメタデータの保存先                                       |
-| `TF_PIPELINE_NAMES`           | Root パスから共通 Pipeline 名への対応表                              |
-| `source_artifact_bucket_name` | ソース取得用 S3 の読み取り許可対象                                   |
-| `shared_pipeline_names`       | 共通 Pipeline 名の明示的な対応表。省略時は共通プレフィックスから算出 |
+| 設定                          | 用途                                   |
+| ----------------------------- | -------------------------------------- |
+| `AWS_GITHUB_PLAN_ROLE_ARN`    | Actions が使用する Plan 用 OIDC ロール |
+| `TF_PLAN_ARTIFACT_BUCKET`     | 保存 Plan とメタデータの保存先         |
+| `source_artifact_bucket_name` | ソース取得用 S3 の読み取り許可対象     |
+
+対象RootはApply基盤と同じ規則で自動検出します。Pipeline名はGitHub repository variable `TF_PIPELINE_NAME_PREFIX`およびRoot basenameから生成され、Rootごとの対応表は不要です。
 
 ## Plan 成果物
 

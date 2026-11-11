@@ -39,7 +39,7 @@ resource "aws_iam_role_policy" "pipeline" {
         Action = ["codebuild:StartBuild", "codebuild:BatchGetBuilds"]
         Resource = [
           aws_codebuild_project.apply[each.key].arn,
-          "arn:aws:codebuild:${var.aws_region}:${var.aws_account_id}:project/${lookup(var.plan_project_names, each.key, "${local.name_prefix}-${each.key}-plan")}"
+          "arn:aws:codebuild:${var.aws_region}:${var.aws_account_id}:project/${local.name_prefix}-${each.key}-plan"
         ]
       }
     ]

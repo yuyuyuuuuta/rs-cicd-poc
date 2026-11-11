@@ -1,5 +1,5 @@
 output "pipeline_names" {
-  value = { for target in keys(local.targets) : target => lookup(var.shared_pipeline_names, target, "${local.name_prefix}-${target}-apply") }
+  value = { for target in keys(local.targets) : local.targets[target].root_dir => "${local.name_prefix}-${target}-apply" }
 }
 
 output "project_names" {

@@ -13,8 +13,10 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-TARGETS = {"terraform/env/poc/ci-test"}
-DEPENDENCIES = {"terraform/env/poc/ci-test": set()}
+TARGET_ROOT_PARENT = "terraform/env/poc"
+TARGET_NAME_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
+DEPENDENCIES = {}
+SHARED_PATH_PREFIXES = ("modules/", "terraform/modules/", "buildspec/")
 DOC_PATHS = {"README.md", "terraform/README.md"}
 PLAN_STATUS_CONTEXT = "Terraform plan"
 
@@ -56,6 +58,33 @@ def validate_pr(pr, repository, expected_head=None, expected_base=None):
 
 
 def select_targets(paths):
+    repository_root = Path(__file__).resolve().parents[2]
+    targets = discover_targets(repository_root)
+    selected = set()
+    added_targets = set()
+    all_targets = False
+
+    for path in paths:
+        if path in DOC_PATHS:
+            continue
+        if path.startswith(SHARED_PATH_PREFIXES):
+            all_targets = True
+            continue
+        match = re.match(r"^terraform/env/poc/([A-Za-z0-9_-]+)/", path)
+        if not match or match[1].startswith("infra-cicd-"):
+            raise ValueError(f"This PR includes a path outside the allowed target roots: {path}")
+        root = f"{TARGET_ROOT_PARENT}/{match[1]}"
+        if root in targets or path.endswith(".tf"):
+            added_targets.add(root)
+        else:
+            raise ValueError(f"This PR includes a path outside the allowed target roots: {path}")
+
+    if all_targets:
+        selected.update(targets)
+        selected.update(added_targets)
+    else:
+        selected.update(added_targets)
+
     def dependencies(prefix, visited):
         if prefix in visited:
             return set()
@@ -65,20 +94,26 @@ def select_targets(paths):
             result.update(dependencies(dependency, visited))
         return result
 
-    selected = set()
-    for path in paths:
-        if path in DOC_PATHS:
-            continue
-        matches = [
-            root for root in TARGETS
-            if any(path.startswith(prefix + "/") for prefix in dependencies(root, set()))
-        ]
-        if not matches:
-            raise ValueError(f"This PR includes a path outside the allowed target roots: {path}")
-        selected.update(matches)
+    selected = set().union(*(dependencies(root, set()) for root in selected)) if selected else set()
     if not selected:
         raise ValueError("The PR has no registered Terraform target changes; no apply or merge will run.")
     return sorted(selected)
+
+
+def discover_targets(repository_root=None):
+    repository_root = Path(repository_root or Path(__file__).resolve().parents[2])
+    parent = repository_root / TARGET_ROOT_PARENT
+    if not parent.is_dir():
+        return set()
+    return {
+        f"{TARGET_ROOT_PARENT}/{directory.name}"
+        for directory in parent.iterdir()
+        if directory.is_dir()
+        and not directory.is_symlink()
+        and not directory.name.startswith("infra-cicd-")
+        and TARGET_NAME_PATTERN.fullmatch(directory.name)
+        and any(item.is_file() and item.suffix == ".tf" for item in directory.iterdir())
+    }
 
 
 def extract_terraform_log(messages, root, phase):
@@ -125,17 +160,11 @@ def summary(text):
         destination.write(redact_identifiers(text) + "\n")
 
 
-def pipeline_names():
-    return parse_pipeline_names(os.environ["TF_PIPELINE_NAMES"], "TF_PIPELINE_NAMES")
-
-
-def parse_pipeline_names(value, setting_name):
-    names = json.loads(value)
-    if not isinstance(names, dict) or set(names) != TARGETS:
-        raise ValueError(f"{setting_name} must map every registered root to its Pipeline name.")
-    if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9.@_-]{1,100}", name) for name in names.values()):
-        raise ValueError(f"Invalid Pipeline name in {setting_name}.")
-    return names
+def pipeline_names(required_targets=()):
+    prefix = os.environ["TF_PIPELINE_NAME_PREFIX"]
+    if not re.fullmatch(r"[A-Za-z0-9.@_-]{1,60}", prefix):
+        raise ValueError("Invalid TF_PIPELINE_NAME_PREFIX repository variable.")
+    return {root: f"{prefix}-{Path(root).name}-apply" for root in required_targets}
 
 
 def redact_identifiers(text):
@@ -143,16 +172,9 @@ def redact_identifiers(text):
         os.environ.get(name, "")
         for name in (
             "AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET",
-            "AWS_GITHUB_ACTIONS_ROLE_ARN", "AWS_GITHUB_PLAN_ROLE_ARN",
+            "AWS_GITHUB_ACTIONS_ROLE_ARN", "AWS_GITHUB_PLAN_ROLE_ARN", "TF_PIPELINE_NAME_PREFIX",
         )
     }
-    try:
-        for env_name in ("TF_PIPELINE_NAMES", "TF_PLAN_PIPELINE_NAMES"):
-            names = json.loads(os.environ.get(env_name, "{}"))
-            if isinstance(names, dict):
-                values.update(name for name in names.values() if isinstance(name, str))
-    except ValueError:
-        pass
     text = re.sub(r"arn:(?:aws|aws-us-gov|aws-cn):[^\s`\"<>]+", "[REDACTED_ARN]", text)
     for value in sorted((value for value in values if value), key=len, reverse=True):
         text = text.replace(value, "[REDACTED]")
@@ -240,7 +262,8 @@ def pr_number():
 
 def target_roots():
     roots = json.loads(os.environ["TARGET_ROOTS"])
-    if not isinstance(roots, list) or not roots or any(root not in TARGETS for root in roots):
+    root_pattern = re.compile(r"^terraform/env/poc/(?!infra-cicd-)[A-Za-z0-9_-]+$")
+    if not isinstance(roots, list) or not roots or any(not isinstance(root, str) or not root_pattern.fullmatch(root) for root in roots):
         raise ValueError("Unregistered Terraform target roots.")
     if len(roots) != len(set(roots)):
         raise ValueError("Duplicate target roots.")
@@ -292,7 +315,7 @@ def require_successful_plan(github, head_sha, base_sha):
     if not match:
         raise ValueError("The plan status has no trusted workflow execution.")
     run = github.request(f"actions/runs/{match[1]}")
-    if (run.get("conclusion") != "success" or run.get("event") != "pull_request_target"
+    if (run.get("conclusion") != "success" or run.get("event") != "pull_request"
             or run.get("path") != ".github/workflows/terraform-plan.yml" or run.get("head_sha") != head_sha
             or (run.get("repository") or {}).get("full_name") != github.repository):
         raise ValueError("The plan workflow did not succeed from the expected trusted base.")
@@ -339,8 +362,8 @@ def snapshot(github, number, expected_head=None, expected_base=None):
 
 
 def prepare_plan():
-    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request_target":
-        raise ValueError("Automatic planning must use the trusted pull_request_target workflow.")
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        raise ValueError("Automatic planning must use the pull_request workflow.")
     github = GitHub()
     number = pr_number()
     pr, head, base = snapshot(
@@ -530,9 +553,9 @@ def execute_pipelines(phase):
         raise ValueError("The PR resolved from the source branch changed before execution.")
     head = os.environ["EXPECTED_HEAD_SHA"]
     base = os.environ["EXPECTED_BASE_SHA"]
-    names = pipeline_names()
-    snapshot(github, number, head, base)
     roots = target_roots()
+    names = pipeline_names(roots)
+    snapshot(github, number, head, base)
     if phase == "apply":
         label_event(github)
     saved_plans = json.loads(os.environ["SAVED_PLANS"]) if phase == "apply" else {}
@@ -672,7 +695,7 @@ def main():
 
 
 def check_config():
-    required = ("AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET", "AWS_GITHUB_ACTIONS_ROLE_ARN", "TF_PIPELINE_NAMES")
+    required = ("AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET", "AWS_GITHUB_ACTIONS_ROLE_ARN", "TF_PIPELINE_NAME_PREFIX")
     if any(not os.environ.get(name) for name in required):
         raise ValueError("Required GitHub Secrets are missing; see the configuration guide.")
     account = os.environ["AWS_ACCOUNT_ID"]
@@ -686,13 +709,13 @@ def check_config():
     for name in ("TF_STATE_BUCKET", "TF_TEST_BUCKET"):
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", os.environ[name]):
             raise ValueError("Invalid bucket name Secret.")
-    pipeline_names()
+    pipeline_names(discover_targets())
 
 
 def check_plan_config():
     required = (
         "AWS_ACCOUNT_ID", "AWS_REGION", "TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET",
-        "AWS_GITHUB_PLAN_ROLE_ARN", "TF_PIPELINE_NAMES",
+        "AWS_GITHUB_PLAN_ROLE_ARN", "TF_PIPELINE_NAME_PREFIX",
     )
     if any(not os.environ.get(name) for name in required):
         raise ValueError("Required GitHub plan configuration is missing; see the configuration guide.")
@@ -707,7 +730,8 @@ def check_plan_config():
     for name in ("TF_STATE_BUCKET", "TF_TEST_BUCKET", "TF_PLAN_ARTIFACT_BUCKET"):
         if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", os.environ[name]):
             raise ValueError(f"Invalid {name} secret.")
-    pipeline_names()
+    roots = json.loads(os.environ["TARGET_ROOTS"]) if os.environ.get("TARGET_ROOTS") else discover_targets()
+    pipeline_names(roots)
 
 
 if __name__ == "__main__":

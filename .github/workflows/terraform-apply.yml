@@ -27,6 +27,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
+      statuses: read
     outputs:
       pr_number: ${{ steps.pr.outputs.pr_number }}
       pr_branch: ${{ steps.pr.outputs.pr_branch }}
@@ -42,7 +43,9 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/terraform_apply.py prepare-apply
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py prepare-apply
+        run: bash .github/scripts/terraform_apply.sh prepare-apply
 
   static-checks:
     needs: inspect
@@ -68,7 +71,8 @@ jobs:
         env:
           CANDIDATE_DIR: ${{ github.workspace }}/candidate
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
-        run: python3 .github/scripts/terraform_apply.py validate
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py validate
+        run: bash .github/scripts/terraform_plan.sh validate
 
   aws-replan:
     needs: [inspect, static-checks]
@@ -78,6 +82,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
+      statuses: read
       id-token: write
     outputs:
       plans: ${{ steps.plan.outputs.plans }}
@@ -88,14 +93,17 @@ jobs:
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
       TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
-      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+      TF_PIPELINE_NAME_PREFIX: ${{ vars.TF_PIPELINE_NAME_PREFIX }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Validate private plan configuration
-        run: python3 .github/scripts/terraform_apply.py check-plan-config
+        env:
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py check-plan-config
+        run: bash .github/scripts/terraform_plan.sh check-plan-config
       - name: Configure read-only plan credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -119,7 +127,8 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
           REQUIRE_PR_PLAN: "true"
-        run: python3 .github/scripts/terraform_apply.py plan
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py plan
+        run: bash .github/scripts/terraform_plan.sh plan
 
   aws-apply:
     needs: [inspect, aws-replan]
@@ -134,6 +143,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
+      statuses: read
       id-token: write
     outputs:
       applied_head: ${{ steps.apply.outputs.applied_head }}
@@ -145,7 +155,7 @@ jobs:
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
       TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
-      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+      TF_PIPELINE_NAME_PREFIX: ${{ vars.TF_PIPELINE_NAME_PREFIX }}
       PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
       PR_BRANCH: ${{ needs.inspect.outputs.pr_branch }}
     steps:
@@ -154,7 +164,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Validate private configuration
-        run: python3 .github/scripts/terraform_apply.py check-config
+        env:
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py check-config
+        run: bash .github/scripts/terraform_apply.sh check-config
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -179,7 +192,9 @@ jobs:
           EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
           SAVED_PLANS: ${{ needs.aws-replan.outputs.plans }}
-        run: python3 .github/scripts/terraform_apply.py apply
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py apply
+        run: bash .github/scripts/terraform_apply.sh apply
 
   merge:
     needs: [inspect, aws-apply]
@@ -189,6 +204,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: read
+      statuses: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -201,4 +217,5 @@ jobs:
           PR_NUMBER: ${{ needs.inspect.outputs.pr_number }}
           EXPECTED_HEAD_SHA: ${{ needs.aws-apply.outputs.applied_head }}
           EXPECTED_BASE_SHA: ${{ needs.aws-apply.outputs.applied_base }}
-        run: python3 .github/scripts/terraform_apply.py merge
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py merge
+        run: bash .github/scripts/terraform_apply.sh merge

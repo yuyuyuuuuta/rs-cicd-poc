@@ -112,8 +112,9 @@ def fresh_pr(value, mode):
             or request("git/ref/heads/main")["object"]["sha"] != value["base"]):
         raise ValueError("PR changed while the pipeline was queued")
     workflow = request(f"actions/runs/{value['run_id']}")
+    expected_event = "pull_request_target" if mode == "apply" else "pull_request"
     if (workflow.get("status") != "in_progress" or str(workflow.get("run_attempt")) != value["attempt"]
-            or workflow.get("head_sha") != value["head"] or workflow.get("event") != "pull_request_target"):
+            or workflow.get("head_sha") != value["head"] or workflow.get("event") != expected_event):
         raise ValueError("The originating workflow is no longer active")
     expected_paths = (".github/workflows/terraform-plan.yml", ".github/workflows/terraform-apply.yml")
     if workflow.get("path") not in expected_paths or (mode == "apply" and workflow["path"] != expected_paths[1]):

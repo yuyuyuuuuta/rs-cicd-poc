@@ -81,7 +81,7 @@ resource "aws_codepipeline" "apply" {
         input_artifacts = ["SourceOutput"]
 
         configuration = {
-          ProjectName = stage.value == "apply" ? aws_codebuild_project.apply[each.key].name : lookup(var.plan_project_names, each.key, "${local.name_prefix}-${each.key}-plan")
+          ProjectName = stage.value == "apply" ? aws_codebuild_project.apply[each.key].name : "${local.name_prefix}-${each.key}-plan"
           EnvironmentVariables = jsonencode([
             { name = "EXPECTED_COMMIT_SHA", value = "#{variables.PrCommitSha}", type = "PLAINTEXT" },
             { name = "SOURCE_COMMIT_SHA", value = "#{SourceVariables.CommitId}", type = "PLAINTEXT" },

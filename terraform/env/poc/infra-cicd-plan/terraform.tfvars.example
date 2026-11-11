@@ -9,3 +9,8 @@ artifact_bucket_name       = "<PLAN_ARTIFACT_BUCKET>"
 test_bucket_name           = "<TF_TEST_BUCKET>"
 codeconnections_arn        = "<CODECONNECTIONS_ARN>"
 source_artifact_bucket_name = "<ARTIFACT_BUCKET>"
+
+# Optional per-root bucket overrides; omitted roots use test_bucket_name.
+# target_bucket_names = {
+#   "ci-test" = "<TF_TEST_BUCKET>"
+# }

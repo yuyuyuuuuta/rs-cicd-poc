@@ -154,7 +154,7 @@ resource "aws_iam_role_policy" "github_plan" {
       {
         Effect   = "Allow"
         Action   = ["codepipeline:StartPipelineExecution", "codepipeline:GetPipelineExecution", "codepipeline:ListActionExecutions"]
-        Resource = [for target in keys(local.targets) : "arn:aws:codepipeline:${var.aws_region}:${var.aws_account_id}:${lookup(var.shared_pipeline_names, target, "${local.name_prefix}-${target}-apply")}"]
+        Resource = [for target in keys(local.targets) : "arn:aws:codepipeline:${var.aws_region}:${var.aws_account_id}:${local.name_prefix}-${target}-apply"]
       },
       {
         Effect   = "Allow"

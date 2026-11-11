@@ -2,8 +2,7 @@ name: Terraform plan PR (automatic)
 run-name: "Terraform plan PR #${{ github.event.pull_request.number }}"
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+  pull_request:
     branches: [main]
 
 permissions:
@@ -20,6 +19,7 @@ env:
 
 jobs:
   inspect:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -43,7 +43,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 .github/scripts/terraform_apply.py prepare-plan
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py prepare-plan
+        run: bash .github/scripts/terraform_plan.sh prepare-plan
 
   static-checks:
     needs: inspect
@@ -69,7 +70,8 @@ jobs:
         env:
           CANDIDATE_DIR: ${{ github.workspace }}/candidate
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
-        run: python3 .github/scripts/terraform_apply.py validate
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py validate
+        run: bash .github/scripts/terraform_plan.sh validate
 
   aws-plan:
     needs: [inspect, static-checks]
@@ -89,14 +91,17 @@ jobs:
       TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
       TF_TEST_BUCKET: ${{ secrets.TF_TEST_BUCKET }}
       TF_PLAN_ARTIFACT_BUCKET: ${{ secrets.TF_PLAN_ARTIFACT_BUCKET }}
-      TF_PIPELINE_NAMES: ${{ secrets.TF_PIPELINE_NAMES }}
+      TF_PIPELINE_NAME_PREFIX: ${{ vars.TF_PIPELINE_NAME_PREFIX }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
       - name: Validate private plan configuration
-        run: python3 .github/scripts/terraform_apply.py check-plan-config
+        env:
+          TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py check-plan-config
+        run: bash .github/scripts/terraform_plan.sh check-plan-config
       - name: Diagnose OIDC subject (no token output)
         uses: actions/github-script@v7
         with:
@@ -128,10 +133,11 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.inspect.outputs.head_sha }}
           EXPECTED_BASE_SHA: ${{ needs.inspect.outputs.base_sha }}
           TARGET_ROOTS: ${{ needs.inspect.outputs.targets }}
-        run: python3 .github/scripts/terraform_apply.py plan
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py plan
+        run: bash .github/scripts/terraform_plan.sh plan
 
   publish-plan-status:
-    if: always()
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
     needs: [inspect, static-checks, aws-plan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -152,4 +158,5 @@ jobs:
           STATIC_CHECK_RESULT: ${{ needs.static-checks.result }}
           PLAN_RESULT: ${{ needs.aws-plan.result }}
           PLAN_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: python3 .github/scripts/terraform_apply.py finalize-plan-status
+        # Python alternative: run: python3 .github/scripts/terraform_apply.py finalize-plan-status
+        run: bash .github/scripts/terraform_plan.sh finalize-plan-status

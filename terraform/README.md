@@ -6,19 +6,19 @@ terraform/
 │   └── state-bucket/          # State 用 S3。管理 State はローカル
 └── env/
     └── poc/
-    ├── ci-test/          # CI/CD 対象の S3 Root
-    ├── infra-cicd-plan/  # Plan 用 CodeBuild/OIDC と保存 Plan S3
-    └── infra-cicd-apply/ # 共通 Pipeline と Apply 用 CodeBuild/OIDC
+        ├── <root>/              # .tfを含むCI/CD対象Root
+        ├── infra-cicd-plan/     # Plan用CodeBuild/OIDCと保存Plan S3
+        └── infra-cicd-apply/    # 共通PipelineとApply用CodeBuild/OIDC
 ```
 
-各ディレクトリは独立した Terraform Root で、State を分離します。CI/CD 対象 Root ごとに1本の共通 Pipeline を持ち、Plan 用・Apply 用 CodeBuild は別ロールで動作します。基盤 Root 自身は自動適用の対象外です。
+各ディレクトリは独立したTerraform Rootで、Stateを分離します。`terraform/env/poc/`直下の`.tf`ファイルを持つディレクトリを自動検出し、`infra-cicd-*`は対象から除外します。対象Rootごとに1本の共通Pipelineを生成し、Plan用・Apply用CodeBuildは別ロールで動作します。
 
 ## Root と State
 
 | Root                       | 管理対象                                                                     | State                                                     |
 | -------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------- |
 | `bootstrap/state-bucket`   | State 用 S3、暗号化、バージョニング、公開ブロック、TLS 必須ポリシー          | ローカル `terraform.tfstate`                              |
-| `env/poc/ci-test`          | 検証用 S3、暗号化、公開ブロック、同バケットの data source                    | S3 `terraform/env/poc/ci-test/terraform.tfstate`          |
+| `env/poc/<root>`           | `.tf`を含む検出対象Root                                                      | S3 `terraform/env/poc/<root>/terraform.tfstate`           |
 | `env/poc/infra-cicd-plan`  | Plan 用 CodeBuild/IAM/OIDC、保存 Plan 用 S3                                  | S3 `terraform/env/poc/infra-cicd-plan/terraform.tfstate`  |
 | `env/poc/infra-cicd-apply` | 共通 Pipeline、Apply 用 CodeBuild/IAM/OIDC、CodeConnections、ソース成果物 S3 | S3 `terraform/env/poc/infra-cicd-apply/terraform.tfstate` |
 
@@ -36,5 +36,7 @@ S3 backend は暗号化と `use_lockfile = true` を使用します。State バ�
 | 公開可能な設定例                     | `.example` ファイル                             |
 
 静的解析ジョブには AWS 認証情報・識別情報 Secrets を渡しません。両 CI/CD 基盤の相互参照は、Apply 側の `plan_artifact_bucket_name` と Plan 側の `source_artifact_bucket_name` です。
+
+Pipeline名はGitHub Actionsのrepository variable `TF_PIPELINE_NAME_PREFIX`を共通prefixとして、`<prefix>-<root basename>-apply`から生成します。RootごとのPipeline名mapやSecretは不要です。
 
 詳細は [Plan 基盤](env/poc/infra-cicd-plan/README.md) と [Apply 基盤](env/poc/infra-cicd-apply/README.md) に記載しています。
