@@ -145,6 +145,7 @@ def run():
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         private_log = directory / "terraform.log"
+        private_log.touch()
 
         def terraform(*arguments, accepted=(0,)):
             completed = subprocess.run(["terraform", f"-chdir={target}", *arguments], capture_output=True, text=True)
@@ -212,9 +213,16 @@ def run():
             result["status"] = "SUCCEEDED"
         except ValueError as error:
             result["error"] = str(error)
+            with private_log.open("a", encoding="utf-8") as destination:
+                destination.write(f"{type(error).__name__}: {error}\n")
             raise
-        except Exception:
+        except Exception as error:
             result["error"] = "AWS_OR_TERRAFORM_EXECUTION_FAILED: consult restricted AWS diagnostics"
+            with private_log.open("a", encoding="utf-8") as destination:
+                destination.write(f"{type(error).__name__}: {error}\n")
+                stderr = getattr(error, "stderr", None)
+                if stderr:
+                    destination.write(stderr)
             raise
         finally:
             if private_log.exists():
