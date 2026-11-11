@@ -12,7 +12,7 @@
 
 ## 認証と入力
 
-Plan Workflowは`pull_request` eventで起動し、OIDC subjectは`repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:pull_request`、audienceは`sts.amazonaws.com`です。
+Plan Workflowは`pull_request_target` eventで起動します。OIDC subjectは`repo:<OWNER>@<OWNER_ID>/<REPOSITORY>@<REPOSITORY_ID>:pull_request`、audienceは`sts.amazonaws.com`です。Workflow event名とOIDC subjectのsuffixは別の値です。
 
 | 設定                          | 用途                                   |
 | ----------------------------- | -------------------------------------- |

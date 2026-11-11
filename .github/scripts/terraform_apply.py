@@ -315,7 +315,7 @@ def require_successful_plan(github, head_sha, base_sha):
     if not match:
         raise ValueError("The plan status has no trusted workflow execution.")
     run = github.request(f"actions/runs/{match[1]}")
-    if (run.get("conclusion") != "success" or run.get("event") != "pull_request"
+    if (run.get("conclusion") != "success" or run.get("event") != "pull_request_target"
             or run.get("path") != ".github/workflows/terraform-plan.yml" or run.get("head_sha") != head_sha
             or (run.get("repository") or {}).get("full_name") != github.repository):
         raise ValueError("The plan workflow did not succeed from the expected trusted base.")
@@ -362,8 +362,8 @@ def snapshot(github, number, expected_head=None, expected_base=None):
 
 
 def prepare_plan():
-    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
-        raise ValueError("Automatic planning must use the pull_request workflow.")
+    if os.environ.get("GITHUB_EVENT_NAME") != "pull_request_target":
+        raise ValueError("Automatic planning must use the pull_request_target workflow.")
     github = GitHub()
     number = pr_number()
     pr, head, base = snapshot(

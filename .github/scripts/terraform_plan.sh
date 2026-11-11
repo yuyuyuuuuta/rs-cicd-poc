@@ -80,7 +80,7 @@ require_successful_plan() {
   run_id=${BASH_REMATCH[1]}
   run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id") || fail "Could not verify the plan workflow run."
   jq -e --arg head "$head" --arg repository "$GITHUB_REPOSITORY" \
-    '.conclusion == "success" and .event == "pull_request" and .path == ".github/workflows/terraform-plan.yml"
+    '.conclusion == "success" and .event == "pull_request_target" and .path == ".github/workflows/terraform-plan.yml"
      and .head_sha == $head and .repository.full_name == $repository' <<< "$run" >/dev/null \
     || fail "The successful plan is not from the expected workflow and PR head."
   printf '%s\t%s\n' "$(jq -r '.id' <<< "$run")" "$(jq -r '.run_attempt' <<< "$run")"
@@ -147,7 +147,7 @@ select_targets() {
 }
 
 prepare_plan() {
-  [[ "${GITHUB_EVENT_NAME:-}" == pull_request ]] || fail "Automatic planning requires a pull_request event."
+  [[ "${GITHUB_EVENT_NAME:-}" == pull_request_target ]] || fail "Automatic planning requires a pull_request_target event."
   local number="${PR_NUMBER:?}" expected_head="${EVENT_PR_HEAD_SHA:?}" expected_base="${EVENT_PR_BASE_SHA:?}"
   validate_pr_snapshot "$number" "$expected_head" "$expected_base"
 

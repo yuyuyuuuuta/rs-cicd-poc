@@ -116,7 +116,7 @@ def fresh_pr(value, mode):
     apply_workflow = ".github/workflows/terraform-apply.yml"
     workflow_path = workflow.get("path")
     if workflow_path == plan_workflow:
-        expected_event = "pull_request"
+        expected_event = "pull_request_target"
     elif workflow_path == apply_workflow:
         expected_event = "pull_request_target"
     else:

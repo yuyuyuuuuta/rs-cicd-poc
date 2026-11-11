@@ -12,7 +12,7 @@ GitHub Actions と AWS CodePipeline/CodeBuild を組み合わせた Terraform CI
 | S3                            | Terraform State、ソース成果物、保存 Plan、承認・消費記録            |
 | GitHub OIDC / CodeConnections | Actions の AWS 認証 / 指定コミットのソース取得                      |
 
-PR 作成・更新時の `pull_request` event で自動 Plan が起動します。`apply-request` ラベルによるApply Workflowは`pull_request_target`で起動し、再PlanとSummary表示の後、Environment `terraform-apply`の承認を経て保存Planを適用します。全対象の成功とPRのSHA・GitHub保護条件を満たす場合だけ自動マージします。
+PR 作成・更新時の `pull_request_target` event で自動 Plan が起動します。`apply-request` ラベルによるApply Workflowも`pull_request_target`で起動し、再PlanとSummary表示の後、Environment `terraform-apply`の承認を経て保存Planを適用します。全対象の成功とPRのSHA・GitHub保護条件を満たす場合だけ自動マージします。
 
 対象Rootは`terraform/env/poc/`直下に`.tf`ファイルを持つディレクトリから自動検出します。`infra-cicd-*`は対象外です。共有module、`terraform/modules/`、`buildspec/`の変更では全対象RootをPlanします。Pipeline名はGitHub Actionsのrepository variable `TF_PIPELINE_NAME_PREFIX`とRootのbasenameから自動生成し、Rootごとの名前mapは使いません。構成の詳細は[terraform/README.md](terraform/README.md)に記載しています。
 
