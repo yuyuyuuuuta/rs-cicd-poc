@@ -2,7 +2,8 @@ name: Terraform plan PR (automatic)
 run-name: "Terraform plan PR #${{ github.event.pull_request.number }}"
 
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 permissions:

@@ -2,7 +2,7 @@ name: Terraform apply PR (label)
 run-name: "Terraform apply PR #${{ github.event.pull_request.number }}"
 
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled, synchronize, unlabeled, closed]
     branches: [main]
 
