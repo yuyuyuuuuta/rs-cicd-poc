@@ -112,14 +112,21 @@ def fresh_pr(value, mode):
             or request("git/ref/heads/main")["object"]["sha"] != value["base"]):
         raise ValueError("PR changed while the pipeline was queued")
     workflow = request(f"actions/runs/{value['run_id']}")
-    expected_event = "pull_request_target" if mode == "apply" else "pull_request"
+    plan_workflow = ".github/workflows/terraform-plan.yml"
+    apply_workflow = ".github/workflows/terraform-apply.yml"
+    workflow_path = workflow.get("path")
+    if workflow_path == plan_workflow:
+        expected_event = "pull_request"
+    elif workflow_path == apply_workflow:
+        expected_event = "pull_request_target"
+    else:
+        raise ValueError("Unexpected originating workflow")
     if (workflow.get("status") != "in_progress" or str(workflow.get("run_attempt")) != value["attempt"]
             or workflow.get("head_sha") != value["head"] or workflow.get("event") != expected_event):
         raise ValueError("The originating workflow is no longer active")
-    expected_paths = (".github/workflows/terraform-plan.yml", ".github/workflows/terraform-apply.yml")
-    if workflow.get("path") not in expected_paths or (mode == "apply" and workflow["path"] != expected_paths[1]):
+    if mode == "apply" and workflow_path != apply_workflow:
         raise ValueError("Unexpected originating workflow")
-    if workflow["path"] == expected_paths[1] and "apply-request" not in {label["name"] for label in pr.get("labels", [])}:
+    if workflow_path == apply_workflow and "apply-request" not in {label["name"] for label in pr.get("labels", [])}:
         raise ValueError("The apply label was removed")
 
 
