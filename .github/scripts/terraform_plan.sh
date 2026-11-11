@@ -86,24 +86,6 @@ require_successful_plan() {
   printf '%s\t%s\n' "$(jq -r '.id' <<< "$run")" "$(jq -r '.run_attempt' <<< "$run")"
 }
 
-verify_previous_plan_manifest() {
-  local root="$1" run_id="$2" attempt="$3" directory="$4" root_hash prefix response manifest_file
-  root_hash=$(printf '%s' "$root" | sha256sum | cut -c1-16)
-  prefix="plans/$GITHUB_REPOSITORY/pr-$PR_NUMBER/$EXPECTED_HEAD_SHA/$root_hash/$run_id/$attempt"
-  manifest_file="$directory/previous-$root_hash.json"
-  response="$directory/previous-response-$root_hash.json"
-  aws s3api get-object --bucket "$TF_PLAN_ARTIFACT_BUCKET" --key "$prefix/manifest.json" \
-    "$manifest_file" > "$response"
-  jq -e --arg repository "$GITHUB_REPOSITORY" --arg pr "$PR_NUMBER" --arg head "$EXPECTED_HEAD_SHA" \
-    --arg base "$EXPECTED_BASE_SHA" --arg root "$root" --arg run "$run_id" --arg attempt "$attempt" \
-    --argjson now "$(date +%s)" \
-    '.repository == $repository and .pr == $pr and .head == $head and .base == $base and .root == $root
-     and .run_id == $run and .attempt == $attempt and .created <= $now and $now < .expires
-     and .expires <= .created + 86400 and (.sha256 | test("^[0-9a-f]{64}$"))
-     and (.plan_version | type == "string" and length > 0)' "$manifest_file" >/dev/null \
-    || fail "A valid, unexpired saved plan is required for $root."
-}
-
 select_targets() {
   local number="$1"
   local -a changed_files available_targets
@@ -240,7 +222,15 @@ report_plan_result() {
     printf '### Terraform plan: %s\n\n' "$root"
     printf '| Added | Changed | Destroyed |\n| ---: | ---: | ---: |\n| %s | %s | %s |\n\n' "$add" "$change" "$destroy"
     printf 'Execution: `%s`\n\n' "$EXECUTION_ID"
+    report_changes "$result_file"
   } >> "$GITHUB_STEP_SUMMARY"
+}
+
+report_changes() {
+  local result_file="$1"
+  printf '```json\n'
+  jq '[.changes[]? | {address: (.address | gsub("\\[(\"([^\"\\\\]|\\\\.)*\"|[0-9]+)\\]"; "[*]")), actions, attributes, attribute_changes: [.attribute_changes[]? | {name, change}]}]' "$result_file"
+  printf '```\n\n'
 }
 
 run_plan() {
@@ -250,15 +240,7 @@ run_plan() {
   mapfile -t roots < <(jq -r '.[]' <<< "${TARGET_ROOTS:?}")
   ((${#roots[@]} > 0)) || fail "No Terraform target roots were provided."
   if [[ "${REQUIRE_PR_PLAN:-false}" == true ]]; then
-    local prior_plan prior_run prior_attempt prior_directory
-    prior_plan=$(require_successful_plan "$head" "$base")
-    prior_run=${prior_plan%%$'\t'*}
-    prior_attempt=${prior_plan#*$'\t'}
-    prior_directory=$(mktemp -d)
-    trap 'rm -rf "$prior_directory"' EXIT
-    for root in "${roots[@]}"; do verify_previous_plan_manifest "$root" "$prior_run" "$prior_attempt" "$prior_directory"; done
-    rm -rf "$prior_directory"
-    trap - EXIT
+    require_successful_plan "$head" "$base" >/dev/null
   fi
   local root pipeline root_hash request_token variables_json execution attempt status execution_json revision
   local action_json build_id build_json log_group log_stream result_record result_file manifest_file manifest_response plans_json

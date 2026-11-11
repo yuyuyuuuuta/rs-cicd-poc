@@ -498,8 +498,14 @@ def report_execution(aws, pipeline, execution_id, root, phase="apply"):
     summary(f"### {phase}: {root}\nResult: **{result.get('status')}**\n\n"
             "| Added | Changed | Destroyed |\n| ---: | ---: | ---: |\n"
             f"| {counts.get('add', '-')} | {counts.get('change', '-')} | {counts.get('destroy', '-')} |\n")
-    rows = result.get("changes", [])
-    summary(fenced_log("\n".join(f"{', '.join(row['actions'])}: {row['address']} [attributes: {', '.join(row['attributes'])}]" for row in rows), limit=20000))
+    rows = []
+    for row in result.get("changes", []):
+        safe_row = {name: row[name] for name in ("actions", "attributes") if name in row}
+        safe_row["address"] = re.sub(r'\[(?:"(?:\\.|[^"\\])*"|[0-9]+)\]', '[*]', row["address"])
+        safe_row["attribute_changes"] = [{name: attribute[name] for name in ("name", "change") if name in attribute}
+                                         for attribute in row.get("attribute_changes", [])]
+        rows.append(safe_row)
+    summary(fenced_log(json.dumps(rows, indent=2), limit=20000))
     if result.get("error"):
         summary("Error summary:\n" + fenced_log(result["error"], limit=2000))
     summary("Execution log: source verified; backend initialized; Terraform validated; " + phase + " " + result.get("status", "FAILED")
@@ -562,13 +568,13 @@ def execute_pipelines(phase):
     if phase == "apply" and set(saved_plans) != set(roots):
         raise ValueError("Saved plans do not cover exactly the selected roots.")
     if phase == "apply" or os.environ.get("REQUIRE_PR_PLAN") == "true":
-        previous_run, previous_attempt = require_successful_plan(github, head, base)
-        for root in roots:
-            read_manifest(aws, plan_binding(root, previous_run, previous_attempt))
+        require_successful_plan(github, head, base)
     failures = []
     results = {}
     for root in roots:
-        snapshot(github, number, head, base)
+        current, _, _ = snapshot(github, number, head, base)
+        if phase == "apply" and "apply-request" not in {label["name"] for label in current.get("labels", [])}:
+            raise ValueError("The apply-request label was removed.")
         pipeline = names[root]
         binding = plan_binding(root)
         target_hash = hashlib.sha256(root.encode()).hexdigest()[:10]
@@ -657,6 +663,8 @@ def merge():
     if number != pr_number():
         raise ValueError("The branch now identifies a different PR; automatic merge is blocked.")
     current, _, _ = snapshot(github, number, head, os.environ["EXPECTED_BASE_SHA"])
+    if "apply-request" not in {label["name"] for label in current.get("labels", [])}:
+        raise ValueError("The apply-request label was removed.")
     if current.get("mergeable_state") not in ("clean", "unstable"):
         raise ValueError("PR mergeability is blocked; no bypass will be attempted.")
     require_successful_plan(github, head, os.environ["EXPECTED_BASE_SHA"])

@@ -20,4 +20,4 @@ PR 作成・更新時の `pull_request_target` event で自動 Plan が起動し
 
 AWS の実識別情報は GitHub Secrets と Git 管理外の設定で保持します。`terraform.tfvars`、`backend.hcl`、`*.local.json`、管理者用の実 IAM JSON、State、保存 Plan は Git 管理対象外です。公開設定は `.example` テンプレートです。
 
-Summary には件数・操作種別・変更属性名を表示し、属性値・Outputs・生 Plan は表示しません。既知の識別情報はマスクしますが、加工された値の完全な秘匿までは保証しません。
+Summary には件数・操作種別・変更属性名と属性の変更種別を表示し、属性値・Outputs・生 Plan は表示しません。機密マーク付き属性とリソースの添字は表示しません。

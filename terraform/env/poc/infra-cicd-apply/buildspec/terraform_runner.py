@@ -52,16 +52,31 @@ def safe_changes(plan):
         counts["change"] += int("update" in actions)
         counts["destroy"] += int("delete" in actions)
         before, after = change.get("before") or {}, change.get("after") or {}
+        unknown = change.get("after_unknown") or {}
+        if not isinstance(unknown, dict):
+            unknown = {name: unknown for name in set(before) | set(after)}
         sensitive = set()
         for field in ("before_sensitive", "after_sensitive"):
             marked = change.get(field, {})
             if marked is True:
-                sensitive.update(set(before) | set(after))
+                sensitive.update(set(before) | set(after) | set(unknown))
             elif isinstance(marked, dict):
                 sensitive.update(name for name, value in marked.items() if value)
-        attributes = sorted(name for name in set(before) | set(after)
-                            if name not in sensitive and before.get(name) != after.get(name))
-        changes.append(dict(address=resource["address"], actions=actions, attributes=attributes))
+        attributes = sorted(name for name in set(before) | set(after) | set(unknown)
+                            if name not in sensitive and (before.get(name) != after.get(name) or unknown.get(name)))
+        attribute_changes = []
+        for name in attributes:
+            if unknown.get(name):
+                operation = "unknown after apply"
+            elif name not in before or before[name] is None:
+                operation = "added"
+            elif name not in after or after[name] is None:
+                operation = "removed"
+            else:
+                operation = "changed"
+            attribute_changes.append(dict(name=name, change=operation))
+        address = re.sub(r'\[(?:"(?:\\.|[^"\\])*"|[0-9]+)\]', '[*]', resource["address"])
+        changes.append(dict(address=address, actions=actions, attributes=attributes, attribute_changes=attribute_changes))
     return dict(counts=counts, changes=changes)
 
 

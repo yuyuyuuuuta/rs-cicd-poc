@@ -157,10 +157,7 @@ run_apply() {
   pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number") || fail "Could not read the current PR."
   jq -e '[.labels[].name] | index("apply-request") != null' <<< "$pr_json" >/dev/null \
     || fail "The apply-request label was removed."
-  local prior_plan run_id attempt
-  prior_plan=$(require_successful_plan "$head" "$base")
-  run_id=${prior_plan%%$'\t'*}
-  attempt=${prior_plan#*$'\t'}
+  require_successful_plan "$head" "$base" >/dev/null
   local -a roots
   mapfile -t roots < <(jq -r '.[]' <<< "${TARGET_ROOTS:?}")
   ((${#roots[@]} > 0)) || fail "No Terraform target roots were provided."
@@ -173,6 +170,9 @@ run_apply() {
   local result_info result_file build_status
   for root in "${roots[@]}"; do
     validate_pr_snapshot "$number" "$head" "$base"
+    pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number") || fail "Could not read the current PR."
+    jq -e '[.labels[].name] | index("apply-request") != null' <<< "$pr_json" >/dev/null \
+      || fail "The apply-request label was removed."
     pipeline=$(pipeline_name_for_root "$root")
     saved=$(jq -c --arg root "$root" '.[$root]' <<< "$SAVED_PLANS")
     approved=$(verify_approved_manifest "$root" "$saved" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$APPLY_TEMP_DIRECTORY")
@@ -210,6 +210,7 @@ run_apply() {
     jq -r --arg root "$root" --arg execution "$execution" \
       '"### Apply result: " + $root + "\n\n| Added | Changed | Destroyed |\n| ---: | ---: | ---: |\n| " + (.counts.add|tostring) + " | " + (.counts.change|tostring) + " | " + (.counts.destroy|tostring) + " |\n\nExecution: `" + $execution + "`\n"' \
       "$result_file" >> "$GITHUB_STEP_SUMMARY"
+    report_changes "$result_file" >> "$GITHUB_STEP_SUMMARY"
   done
   validate_pr_snapshot "$number" "$head" "$base"
   printf 'applied_head=%s\napplied_base=%s\n' "$head" "$base" >> "$GITHUB_OUTPUT"
@@ -220,6 +221,8 @@ merge_applied_pr() {
   validate_pr_snapshot "$number" "$head" "$base"
   validate_pr_branch "$number" "${PR_BRANCH:?}"
   pr_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number") || fail "Could not read the PR before merge."
+  jq -e '[.labels[].name] | index("apply-request") != null' <<< "$pr_json" >/dev/null \
+    || fail "The apply-request label was removed."
   jq -e '.mergeable_state == "clean" or .mergeable_state == "unstable"' <<< "$pr_json" >/dev/null \
     || fail "PR mergeability is blocked; no bypass will be attempted."
   require_successful_plan "$head" "$base" >/dev/null

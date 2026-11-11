@@ -52,11 +52,11 @@ GitHub Actionsの制御は[terraform_apply.sh](../../../../.github/scripts/terra
 
 ## 適用条件と制約
 
-- PR/head/base/Root/Workflow run/attempt、S3 VersionId、SHA-256、有効期限を保存 Plan と照合します。承認後は `terraform apply <saved-plan>` だけを実行します。
+- PR Plan は同一 head/base の成功ステータスを確認し、保存 Plan の期限や保持期間には依存しません。Apply 前に作り直した Plan は PR/head/base/Root/Workflow run/attempt、S3 VersionId、SHA-256 と24時間の有効期限を照合し、承認後に `terraform apply <saved-plan>` で適用します。期限切れの場合は再 Plan と再承認が必要です。
 - S3 の `approvals/` は Apply 用 OIDC ロールだけが書き込み可能です。CodeBuild は `consumed/` に排他作成し、Plan ごと・PR/head/Root ごとの適用試行を一度に制限します。失敗時も消費記録は残ります。
-- Terraform の State ロックと古い Plan の拒否が有効です。PR ごとの Workflow concurrency、承認後ジョブのリポジトリ単位 concurrency、Root ごとの Pipeline キューで競合を制御します。
-- PR 更新・ラベル解除・PR 終了は古い Workflow をキャンセルしますが、開始済みの AWS 操作は自動停止・ロールバックされません。
+- Terraform の State ロックと古い Plan の拒否が有効です。承認後ジョブのリポジトリ単位 concurrency と Root ごとの Pipeline キューで競合を制御します。
+- PR 更新・`apply-request` ラベル解除・PR 終了時は同じ PR の古い Workflow をキャンセルします。Apply ジョブが実行中の場合はキャンセルせず、新しい Apply はジョブ単位の concurrency で待機します。状態確認とキャンセルは原子的ではなく、開始済みの AWS 操作は自動停止・ロールバックされません。
 - CodeBuild は公開 GitHub API で PR と Workflow を再確認します。非公開リポジトリや API 確認失敗時は適用しません。
 - 全 Root 成功、最新 head/base、成功 Plan、`mergeable_state=clean` を満たす場合だけ、head SHA 指定の通常 merge API を使います。base の確認と merge API は原子的ではありません。
 - 必須チェックはマージ前に完了する必要があり、Apply Workflow 全体の完了を必須にするとマージジョブとの循環が生じます。
-- Summary は件数・操作種別・変更属性名・安全なエラー要約を表示し、属性値・Outputs・生 Plan は非公開です。
+- Summary は件数・操作種別・変更属性名と属性の追加・削除・変更・適用後確定を表示し、属性値・Outputs・生 Plan は非公開です。機密マーク付き属性とリソースの添字は表示しません。
