@@ -8,6 +8,8 @@
 
 ## 1. まず全体像
 
+![全体像](./rs-cicd-poc-architecture-small.png)
+
 ```mermaid
 flowchart TD
   A[PRを作成・更新] --> B[自動Plan]
