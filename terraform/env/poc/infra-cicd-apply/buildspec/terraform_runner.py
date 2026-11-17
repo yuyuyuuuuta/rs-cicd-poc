@@ -1,3 +1,5 @@
+import base64
+import email.utils
 import hashlib
 import json
 import os
@@ -6,6 +8,7 @@ import re
 import subprocess
 import tempfile
 import time
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -113,12 +116,106 @@ def verify_manifest(manifest, value):
         raise ValueError("Terraform version mismatch")
 
 
+def encoded_segment(value):
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def create_app_jwt(app_id, private_key):
+    now = int(time.time())
+    header = encoded_segment(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    claims = encoded_segment(json.dumps({"iat": now - 60, "exp": now + 540, "iss": app_id},
+                                        separators=(",", ":")).encode())
+    message = f"{header}.{claims}".encode("ascii")
+    key_fd = os.memfd_create("github-app-private-key")
+    try:
+        key_bytes = private_key.encode("utf-8")
+        offset = 0
+        while offset < len(key_bytes):
+            offset += os.write(key_fd, key_bytes[offset:])
+        os.lseek(key_fd, 0, os.SEEK_SET)
+        signature = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", f"/proc/self/fd/{key_fd}"],
+            input=message, capture_output=True, check=True, pass_fds=(key_fd,)
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("GitHub App JWT signing failed") from None
+    finally:
+        os.close(key_fd)
+    return f"{header}.{claims}.{encoded_segment(signature)}"
+
+
+def rate_limit_delay(error):
+    retry_after = error.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            return max(0, float(retry_after))
+        except ValueError:
+            try:
+                retry_time = email.utils.parsedate_to_datetime(retry_after).timestamp()
+                return max(0, retry_time - time.time())
+            except (TypeError, ValueError, OverflowError):
+                pass
+    limited = error.code == 429 or error.headers.get("X-RateLimit-Remaining") == "0"
+    reset = error.headers.get("X-RateLimit-Reset")
+    if limited and reset is not None:
+        try:
+            return max(0, float(reset) - time.time())
+        except ValueError:
+            pass
+    return None
+
+
+def github_json(path, bearer, method="GET"):
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "terraform-cicd",
+               "Authorization": f"Bearer {bearer}"}
+    data = b"{}" if method == "POST" else None
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(f"https://api.github.com/{path}", data=data, headers=headers, method=method)
+    for attempt in range(3):
+        try:
+            with urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except HTTPError as error:
+            delay = rate_limit_delay(error) if error.code in (403, 429) else None
+            if delay is None or attempt == 2:
+                raise ValueError("GitHub API request failed") from None
+            if not 0 <= delay <= 120:
+                raise ValueError("GitHub API rate-limit delay exceeds the retry window") from None
+            time.sleep(delay)
+        except URLError:
+            raise ValueError("GitHub API request failed") from None
+
+
+def github_installation_token():
+    secret_json = os.environ.pop("GITHUB_APP_SECRET", None)
+    if secret_json is None:
+        raise ValueError("GitHub App credentials are unavailable")
+    try:
+        credentials = json.loads(secret_json)
+    except (TypeError, json.JSONDecodeError):
+        raise ValueError("GitHub App credentials are invalid") from None
+    del secret_json
+    app_id = str(credentials.get("app_id", ""))
+    installation_id = str(credentials.get("installation_id", ""))
+    private_key = credentials.get("private_key")
+    if (not re.fullmatch(r"[0-9]+", app_id) or not re.fullmatch(r"[0-9]+", installation_id)
+            or not isinstance(private_key, str) or not re.match(r"-----BEGIN (?:RSA )?PRIVATE KEY-----", private_key)):
+        raise ValueError("GitHub App credentials are invalid")
+    credentials.clear()
+    app_jwt = create_app_jwt(app_id, private_key)
+    del private_key
+    response = github_json(f"app/installations/{installation_id}/access_tokens", app_jwt, method="POST")
+    token = response.get("token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("GitHub App installation token response is invalid")
+    return token
+
+
 def fresh_pr(value, mode):
+    token = github_installation_token()
     def request(path):
-        request = Request(f"https://api.github.com/repos/{value['repository']}/{path}",
-                          headers={"Accept": "application/vnd.github+json", "User-Agent": "terraform-cicd"})
-        with urlopen(request, timeout=30) as response:
-            return json.load(response)
+        return github_json(f"repos/{value['repository']}/{path}", token)
 
     pr = request(f"pulls/{value['pr']}")
     if (pr.get("state") != "open" or pr.get("draft") or pr["head"]["sha"] != value["head"]

@@ -52,3 +52,12 @@ variable "target_bucket_names" {
 variable "plan_artifact_bucket_name" {
   type = string
 }
+
+variable "github_app_secret_arn" {
+  type = string
+}
+
+variable "github_app_secret_kms_key_arn" {
+  type    = string
+  default = null
+}
