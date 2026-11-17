@@ -22,6 +22,24 @@ Plan Workflowは`pull_request_target` eventで起動します。OIDC subjectは`
 
 対象RootはApply基盤と同じ規則で自動検出します。Pipeline名はGitHub repository variable `TF_PIPELINE_NAME_PREFIX`およびRoot basenameから生成され、Rootごとの対応表は不要です。
 
+## GitHub API 認証
+
+Plan と Apply の CodeBuild は同じ AWS Secrets Manager Secret を `GITHUB_APP_SECRET` として参照します。Secret の `SecretString` は次の JSON 形式です。`private_key` は GitHub App からダウンロードした PEM を JSON 文字列として格納します。
+
+```json
+{
+	"app_id": "123456",
+	"installation_id": "12345678",
+	"private_key": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+}
+```
+
+Plan と Apply それぞれの非公開 `terraform.tfvars` に同じ `github_app_secret_arn` を設定します。カスタマー管理 KMS キーを Secret に使う場合だけ、両方に `github_app_secret_kms_key_arn` も設定します。Secret ARN はCodeBuildの Secrets Manager型環境変数で参照され、サービスロールには対象Secret ARNだけへの `secretsmanager:GetSecretValue` を付与します。CMKの場合の `kms:Decrypt` も指定キーARNとSecrets Manager経由に限定します。
+
+GitHub Organization で GitHub App を作成し、Webhook は無効化できます。Repository permissions は `Pull requests: Read-only`、`Contents: Read-only`、`Actions: Read-only` だけにします。App を Organization の全Repositoryではなく対象の `rs-cicd-poc` Repository だけにインストールし、App ID、Installation ID、秘密鍵を上記形式で Secrets Manager に登録します。Terraformの設定例はこのディレクトリの `terraform.tfvars.example` とApply側の同名ファイルを参照してください。
+
+CodeBuild の既存 Amazon Linux 標準イメージに含まれる OpenSSL CLI でメモリ上の秘密鍵から RS256 JWT を署名し、短期 Installation Access Token を発行します。追加Pythonパッケージのダウンロードは行いません。JWT、秘密鍵、Installation Access Tokenは出力・S3保存せず、GitHub APIリクエストにだけ使います。
+
 ## Plan 成果物
 
 Plan 本体とメタデータは、暗号化・バージョニング・公開ブロック・TLS 必須ポリシーを持つ S3 に保存します。メタデータは PR/head/base/Root/Workflow run/attempt、Plan の S3 VersionId、SHA-256、Terraform バージョン、有効期限を保持します。

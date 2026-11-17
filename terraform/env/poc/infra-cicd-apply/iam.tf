@@ -66,7 +66,7 @@ resource "aws_iam_role_policy" "build" {
   role     = aws_iam_role.build[each.key].id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -117,6 +117,11 @@ resource "aws_iam_role_policy" "build" {
         ]
       },
       {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = var.github_app_secret_arn
+      },
+      {
         Effect = "Allow"
         Action = ["s3:PutObject"]
         Resource = [
@@ -133,7 +138,14 @@ resource "aws_iam_role_policy" "build" {
         ]
         Resource = "arn:aws:s3:::${each.value.bucket_name}"
       }
-    ]
+      ], var.github_app_secret_kms_key_arn == null ? [] : [{
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.github_app_secret_kms_key_arn
+        Condition = {
+          StringEquals = { "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com" }
+        }
+    }])
   })
 }
 

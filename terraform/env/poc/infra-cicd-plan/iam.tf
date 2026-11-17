@@ -68,7 +68,7 @@ resource "aws_iam_role_policy" "build" {
   role     = aws_iam_role.build[each.key].id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -109,6 +109,11 @@ resource "aws_iam_role_policy" "build" {
       },
       {
         Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = var.github_app_secret_arn
+      },
+      {
+        Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
         Resource = "arn:aws:s3:::${local.state_bucket}/${each.value.root_dir}/terraform.tfstate.tflock"
       },
@@ -122,7 +127,14 @@ resource "aws_iam_role_policy" "build" {
         Action   = ["sts:GetCallerIdentity"]
         Resource = "*"
       }
-    ]
+      ], var.github_app_secret_kms_key_arn == null ? [] : [{
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = var.github_app_secret_kms_key_arn
+        Condition = {
+          StringEquals = { "kms:ViaService" = "secretsmanager.${var.aws_region}.amazonaws.com" }
+        }
+    }])
   })
 }
 

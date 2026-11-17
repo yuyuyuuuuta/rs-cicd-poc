@@ -40,6 +40,11 @@ resource "aws_codebuild_project" "plan" {
       value = var.github_repository
     }
     environment_variable {
+      name  = "GITHUB_APP_SECRET"
+      type  = "SECRETS_MANAGER"
+      value = var.github_app_secret_arn
+    }
+    environment_variable {
       name  = "TARGET_STATE_DIR"
       value = each.value.root_dir
     }

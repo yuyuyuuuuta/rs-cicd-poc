@@ -8,6 +8,10 @@ state_bucket_name   = "<TF_STATE_BUCKET>"
 artifact_bucket_name = "<ARTIFACT_BUCKET>"
 test_bucket_name    = "<TF_TEST_BUCKET>"
 plan_artifact_bucket_name = "<PLAN_ARTIFACT_BUCKET>"
+github_app_secret_arn     = "<GITHUB_APP_SECRET_ARN>"
+
+# Optional. Set only when the secret uses a customer-managed KMS key.
+# github_app_secret_kms_key_arn = "<KMS_KEY_ARN>"
 
 # Optional per-root bucket overrides; omitted roots use test_bucket_name.
 # target_bucket_names = {

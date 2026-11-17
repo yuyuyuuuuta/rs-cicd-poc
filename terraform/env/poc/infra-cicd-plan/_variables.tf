@@ -56,3 +56,12 @@ variable "codeconnections_arn" {
 variable "source_artifact_bucket_name" {
   type = string
 }
+
+variable "github_app_secret_arn" {
+  type = string
+}
+
+variable "github_app_secret_kms_key_arn" {
+  type    = string
+  default = null
+}
