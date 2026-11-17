@@ -6,7 +6,7 @@ resource "aws_s3_bucket" "ci_test" {
     Project      = "rs-cicd-poc"
     Environment  = "poc"
     ManagedBy    = "Terraform"
-    Verification = "plan-smoke-test-1"
+    Verification = "plan-smoke-test-2"
   }
 }
 
