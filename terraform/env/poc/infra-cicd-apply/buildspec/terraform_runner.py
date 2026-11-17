@@ -212,8 +212,7 @@ def github_installation_token():
     return token
 
 
-def fresh_pr(value, mode):
-    token = github_installation_token()
+def fresh_pr(value, mode, token):
     def request(path):
         return github_json(f"repos/{value['repository']}/{path}", token)
 
@@ -274,7 +273,8 @@ def run():
             return completed
 
         try:
-            fresh_pr(value, mode)
+            github_token = github_installation_token()
+            fresh_pr(value, mode, github_token)
             if mode == "apply":
                 manifest, manifest_version = get_json(bucket, prefix + "/manifest.json", directory,
                                                       os.environ["MANIFEST_VERSION"])
@@ -312,7 +312,7 @@ def run():
                 manifest_version = put_json(bucket, prefix + "/manifest.json", manifest, directory, exclusive=True)
                 result.update(manifest_version=manifest_version, sha256=manifest["sha256"], **changes)
             else:
-                fresh_pr(value, mode)
+                fresh_pr(value, mode, github_token)
                 root_hash = hashlib.sha256(value["root"].encode()).hexdigest()[:16]
                 put_json(bucket, f"consumed/by-head/{value['repository']}/pr-{value['pr']}/{value['head']}/{root_hash}.json",
                          dict(binding=value, execution=os.environ["PIPELINE_EXECUTION_ID"]), directory, exclusive=True)
